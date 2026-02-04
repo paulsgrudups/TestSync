@@ -1,18 +1,14 @@
 package ws
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/utils"
-	"github.com/paulsgrudups/testsync/wsutil"
-
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
-	"github.com/pkg/errors"
+	"github.com/paulsgrudups/testsync/api/runs"
+	"github.com/paulsgrudups/testsync/utils"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -46,10 +42,9 @@ func (s *Server) register(r *mux.Router) {
 func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
 	upgrader.CheckOrigin = func(r *http.Request) bool { return true }
 
-	// Uncomment if user needs to be validated
-	// if !isUserAuthorized(w, r) {
-	// 	return
-	// }
+	if !isUserAuthorized(w, r) {
+		return
+	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -88,19 +83,15 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 		}
 	}()
 
-	r, ok := runs.AllTests[testID]
-	if !ok {
-		runs.AllTests[testID] = &runs.Test{
+	r := runs.EnsureTest(testID, func() *runs.Test {
+		return &runs.Test{
 			Created:     time.Now(),
 			Connections: []*websocket.Conn{},
 			CheckPoints: make(map[string]*runs.Checkpoint),
 		}
+	})
 
-		r = runs.AllTests[testID]
-	}
-
-	r.Connections = append(r.Connections, conn)
-	idx := len(r.Connections) - 1
+	idx := r.AddConnection(conn)
 
 	for {
 		messageType, p, err := conn.ReadMessage()
@@ -122,63 +113,41 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 			return
 		}
 
-		err = s.processMessage(idx, p, r)
+		log.Infof("Received message: %s", string(p))
+
+		handler := s.Handler
+		if handler == nil {
+			handler = NewCommandHandler(nil)
+		}
+
+		err = handler.Handle(testID, idx, p, r)
 		if err != nil {
 			log.Errorf("Failed to process message: %s", err.Error())
 		}
 	}
 }
 
-func (s *Server) processMessage(connIdx int, body []byte, t *runs.Test) error {
-	m := &wsutil.Message{}
-
-	log.Infof("Received message: %s", string(body))
-
-	err := json.Unmarshal(body, &m)
-	if err != nil {
-		return errors.Wrap(err, "could not unmarshal message")
-	}
-
-	switch m.Command {
-	case CommandReadData:
-		return t.Connections[connIdx].WriteMessage(0, t.Data)
-	case CommandUpdateData:
-		t.Data = m.Content.Bytes
-
-		return nil
-	case CommandGetConnectionCount:
-		return wsutil.SendMessage(
-			t.Connections[connIdx],
-			CommandGetConnectionCount,
-			struct {
-				Count int `json:"count"`
-			}{Count: len(t.Connections)},
-		)
-	case CommandWaitCheckpoint:
-		return waitCheckPoint(m.Content.Bytes, connIdx, t)
-	case CommandClose:
-		// TODO: Add error handling
-		return t.Connections[connIdx].Close()
-	default:
-		return errors.Errorf("received non existing command: %s", m.Command)
-	}
-}
-
 // isUserAuthorized checks if provided request has set correct authorization
 // headers.
 func isUserAuthorized(w http.ResponseWriter, r *http.Request) bool {
+	if SyncClient.Username == "" && SyncClient.Password == "" {
+		return true
+	}
+
 	user, pass, ok := r.BasicAuth()
 	if !ok {
-		log.Debug("Could not get basic auth")
-		utils.HTTPError(w, "Request not authorized", http.StatusUnauthorized)
-
-		return false
+		user = r.URL.Query().Get("username")
+		pass = r.URL.Query().Get("password")
+		if user == "" && pass == "" {
+			log.Debug("Could not get basic auth")
+			utils.HTTPError(w, "Request not authorized", http.StatusUnauthorized)
+			return false
+		}
 	}
 
 	if user != SyncClient.Username || pass != SyncClient.Password {
 		log.Debug("Could not validate user, invalid credentials")
 		utils.HTTPError(w, "Request not authorized", http.StatusUnauthorized)
-
 		return false
 	}
 

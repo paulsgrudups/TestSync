@@ -5,35 +5,107 @@ The tool may contain critical issues.
 Future versions may introduce breaking changes.
 
 # TestSync
-TestSync is a easy use Go based test agent synchronization tool by utitilzing 
-action synchronization algorithms and data sharing.
+Lightweight test agent synchronization over HTTP and WebSocket. Store test data, share it across agents, and coordinate checkpoints in real time.
 
-Usable with a simple HTTP API and WebSocket connection.
+> Status: experimental. Use at your own risk.
 
-## Prerequisites
-Go - `brew install go`
+## What it does
+- Store per-test data via HTTP and fetch it later
+- Coordinate agents with WebSocket checkpoints
+- Optional persistence via SQLite
 
-## Usage
-To use this synchronization tool all you have to do is clone this repository
-1) `git clone git@github.com:paulsgrudups/TestSync.git`
-2) Download all Go modules - `go mod download`
-3) Build binary - `go build`
-4) Create config file
-5) Launch executable
+## Quickstart
+1) Install Go
+2) Create configuration
+3) Run the server
 
-## Configuration file example
+Example config:
 ```
 {
-    "http_port": 9104,
-    "ws_port": 9105,
-    
-    "logging": {
-        "level": "DEBUG"
-      },
-
-    "sync_client" : {
-      "username": "exampleUserName",
-      "password": "examplePassWord"
-    }    
+  "http_port": 9104,
+  "ws_port": 9105,
+  "logging": {
+    "level": "DEBUG"
+  },
+  "sync_client": {
+    "username": "exampleUserName",
+    "password": "examplePassWord"
+  },
+  "storage": {
+    "type": "sqlite",
+    "sqlite_path": "./testsync.db"
+  }
 }
 ```
+
+Run:
+- go run main.go -c ./config
+
+## API
+
+### HTTP
+Base: http://<host>:<http_port>
+
+Routes:
+- POST /tests/{testID}
+  - Stores raw request body as test data
+  - Auth: Basic Auth using sync_client
+- GET /tests/{testID}
+  - Returns stored raw test data
+  - Auth: Basic Auth using sync_client
+- GET /health
+  - Returns {"status":"ok"}
+
+Responses:
+- Errors are JSON: {"code": <int>, "error": "<message>"}
+- Success responses return raw bytes
+
+### WebSocket
+Base: ws://<host>:<ws_port>
+
+Routes:
+- GET /register/{testID}
+  - Establishes WS connection for a test run
+  - Auth: Basic Auth if configured
+  - Fallback: query params username/password for clients without header support
+
+Message format:
+```
+{
+  "command": "<string>",
+  "content": <json>
+}
+```
+
+Commands:
+- read_data: reply with raw stored data
+- update_data: replace stored data with provided content
+- get_connection_count: reply with {"count": <int>}
+- wait_checkpoint: register checkpoint barrier
+- close: close the WS connection
+
+Checkpoint content:
+```
+{
+  "identifier": "<string>",
+  "target_count": <int>
+}
+```
+
+## Storage
+Storage options:
+- memory (default)
+- sqlite (persist test data on disk)
+
+## E2E validation
+E2E script: [usage/e2e/main.go](usage/e2e/main.go)
+
+Environment variables:
+- TESTSYNC_HTTP_URL (default: http://localhost:9104)
+- TESTSYNC_WS_URL (default: ws://localhost:9105)
+- TESTSYNC_USER (default: exampleUserName)
+- TESTSYNC_PASS (default: examplePassWord)
+
+## Development
+- go test ./...
+- go run main.go -c ./config

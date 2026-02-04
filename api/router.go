@@ -15,7 +15,7 @@ import (
 
 // HandleRoutes registers all routes.
 func HandleRoutes() (http.Handler, error) {
-	router := mux.NewRouter().StrictSlash(true)
+	router := mux.NewRouter().StrictSlash(false)
 
 	err := registerMiddlewares(router)
 	if err != nil {
@@ -24,6 +24,12 @@ func HandleRoutes() (http.Handler, error) {
 
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "A random proverb that is very intellectual.")
+	})
+
+	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`)) // nolint: gosec, errcheck
 	})
 
 	runs.RegisterTestsRoutes(router)
@@ -45,6 +51,7 @@ func registerMiddlewares(r *mux.Router) error {
 	}
 
 	r.Use(timeoutMW)
+	r.Use(utils.LogRequests)
 
 	return nil
 }

@@ -15,6 +15,7 @@ type Config struct {
 	WSPort     int              `json:"ws_port"`
 	Logging    LogConfig        `json:"logging"`
 	SyncClient BasicCredentials `json:"sync_client"`
+	Storage    StorageConfig    `json:"storage"`
 }
 
 // BasicCredentials defines generic client details.
@@ -32,6 +33,34 @@ type LogConfig struct {
 
 	// Directory where to save log file.
 	Dir string `json:"dir"`
+}
+
+// StorageConfig defines storage settings for test data.
+type StorageConfig struct {
+	// Type can be "memory" or "sqlite".
+	Type string `json:"type"`
+
+	// SQLitePath defines the sqlite db path when Type is "sqlite".
+	SQLitePath string `json:"sqlite_path"`
+}
+
+// ApplyDefaults fills in default values for missing config fields.
+func ApplyDefaults(conf *Config) {
+	if conf == nil {
+		return
+	}
+
+	if conf.Logging.Level == "" {
+		conf.Logging.Level = "INFO"
+	}
+
+	if conf.Logging.Dir == "" {
+		conf.Logging.Dir = "."
+	}
+
+	if conf.Storage.Type == "" {
+		conf.Storage.Type = "memory"
+	}
 }
 
 // ReadConfig reads file into given config object.

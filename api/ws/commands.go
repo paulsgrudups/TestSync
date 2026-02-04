@@ -2,7 +2,6 @@ package ws
 
 import (
 	"encoding/json"
-	"sync"
 
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/wsutil"
@@ -18,8 +17,6 @@ const (
 	CommandClose              = "close"
 )
 
-var mu = &sync.Mutex{}
-
 func waitCheckPoint(b []byte, connIdx int, t *runs.Test) error {
 	var check struct {
 		TargetCount int    `json:"target_count"`
@@ -34,24 +31,14 @@ func waitCheckPoint(b []byte, connIdx int, t *runs.Test) error {
 	// check if provided indentifier is already used, if it's already assigned
 	// to test, then just add this connection. In case of a new identifier a
 	// checkpoint is created.
-	point, ok := t.CheckPoints[check.Identifier]
-	if !ok {
-		mu.Lock()
+	point := t.EnsureCheckpoint(check.Identifier, check.TargetCount)
 
-		t.CheckPoints[check.Identifier] = runs.CreateCheckpoint(
-			check.Identifier, check.TargetCount, t,
-		)
-
-		point = t.CheckPoints[check.Identifier]
-
-		mu.Unlock()
-	}
-
-	if point.Finished {
+	finished := point.IsFinished()
+	if finished {
 		// checkpoint has already finished, send a notification about
 		// checkpoint's status.
 		err = wsutil.SendMessage(
-			t.Connections[connIdx],
+			t.GetConnection(connIdx),
 			"wait_checkpoint",
 			struct {
 				Command    string `json:"command"`
@@ -60,7 +47,7 @@ func waitCheckPoint(b []byte, connIdx int, t *runs.Test) error {
 			}{
 				Command:    "wait_checkpoint",
 				Identifier: point.Identifier,
-				Finished:   point.Finished,
+				Finished:   finished,
 			},
 		)
 		if err != nil {

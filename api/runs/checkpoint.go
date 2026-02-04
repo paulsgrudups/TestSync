@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"sync"
 	"time"
 
 	"github.com/paulsgrudups/testsync/wsutil"
@@ -14,6 +15,7 @@ type Checkpoint struct {
 	ConnectionIdx []int
 	Finished      bool
 	connEvents    chan bool
+	mu            sync.Mutex
 }
 
 // CreateCheckpoint create a new checkpoint for specified test.
@@ -29,13 +31,16 @@ func CreateCheckpoint(identifier string, target int, t *Test) *Checkpoint {
 	go func() {
 		for range cp.connEvents {
 			log.Info("Got event, checking!")
-			if len(cp.ConnectionIdx) >= cp.TargetCount {
+			cp.mu.Lock()
+			finished := len(cp.ConnectionIdx) >= cp.TargetCount
+			if finished {
 				log.Debug("Connection target reached - broadcasting")
-
 				cp.Finished = true
+			}
+			cp.mu.Unlock()
 
+			if finished {
 				cp.broadcastStatus(t)
-
 				break
 			}
 		}
@@ -48,17 +53,40 @@ func CreateCheckpoint(identifier string, target int, t *Test) *Checkpoint {
 func (cp *Checkpoint) AddConnection(idx int) {
 	log.Debugf("Adding connection to checkpoint %q", cp.Identifier)
 
+	cp.mu.Lock()
 	cp.ConnectionIdx = append(cp.ConnectionIdx, idx)
+	finished := cp.Finished
+	cp.mu.Unlock()
 
-	if !cp.Finished {
+	if !finished {
 		cp.connEvents <- true
 	}
 }
 
+// IsFinished returns whether checkpoint has completed.
+func (cp *Checkpoint) IsFinished() bool {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+
+	return cp.Finished
+}
+
 func (cp *Checkpoint) broadcastStatus(t *Test) {
-	for _, idx := range cp.ConnectionIdx {
+	cp.mu.Lock()
+	indices := make([]int, len(cp.ConnectionIdx))
+	copy(indices, cp.ConnectionIdx)
+	finished := cp.Finished
+	cp.mu.Unlock()
+
+	connections := t.GetConnectionsSnapshot()
+
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(connections) {
+			continue
+		}
+
 		err := wsutil.SendMessage(
-			t.Connections[idx],
+			connections[idx],
 			"wait_checkpoint",
 			struct {
 				Identifier string `json:"identifier"`
@@ -66,7 +94,7 @@ func (cp *Checkpoint) broadcastStatus(t *Test) {
 				StartAt    int64  `json:"start_at"`
 			}{
 				Identifier: cp.Identifier,
-				Finished:   cp.Finished,
+				Finished:   finished,
 				StartAt:    time.Now().Add(time.Millisecond * 500).UnixMilli(),
 			},
 		)
