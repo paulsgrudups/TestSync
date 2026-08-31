@@ -68,4 +68,36 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.Storage.SQLitePath != DefaultSQLitePath {
 		t.Fatalf("expected default sqlite path %q, got %q", DefaultSQLitePath, cfg.Storage.SQLitePath)
 	}
+	// Authentication defaults to required: disabling it has to be an explicit
+	// choice (SEC-1).
+	if cfg.Auth.Mode != AuthModeBasic {
+		t.Fatalf("expected default auth mode %q, got %q", AuthModeBasic, cfg.Auth.Mode)
+	}
+}
+
+func TestReadConfig_AuthMode(t *testing.T) {
+	originalFS := FS
+	FS = afero.NewMemMapFs()
+	t.Cleanup(func() { FS = originalFS })
+
+	contents := `{"auth": {"mode": "none"}}`
+
+	if err := afero.WriteFile(FS, "/config.json", []byte(contents), 0644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	var cfg Config
+	if err := ReadConfig("/config.json", &cfg); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if cfg.Auth.Mode != AuthModeNone {
+		t.Fatalf("expected auth mode %q, got %q", AuthModeNone, cfg.Auth.Mode)
+	}
+
+	ApplyDefaults(&cfg)
+
+	if cfg.Auth.Mode != AuthModeNone {
+		t.Fatalf("defaults overwrote the configured auth mode: %q", cfg.Auth.Mode)
+	}
 }

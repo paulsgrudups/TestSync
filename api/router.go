@@ -55,6 +55,9 @@ func registerMiddlewares(r *mux.Router) error {
 		return http.TimeoutHandler(next, 10*time.Second, string(body))
 	}
 
+	// Outermost, so that it also catches the panic http.TimeoutHandler
+	// re-raises in this goroutine after its own handler goroutine panicked.
+	r.Use(utils.RecoverPanics)
 	r.Use(timeoutMW)
 	r.Use(utils.LogRequests)
 

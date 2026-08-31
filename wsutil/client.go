@@ -20,6 +20,13 @@ const (
 	// pingPeriod is how often an idle connection is pinged.
 	pingPeriod = 10 * time.Second
 
+	// PongWait is how long a connection may stay silent before its reader
+	// declares the peer gone. It is derived from pingPeriod rather than chosen
+	// independently: a peer gets three pings, so a single lost ping does not
+	// reap a healthy agent, while a vanished one is released within 30s
+	// instead of holding its goroutine, descriptor and barrier slot forever.
+	PongWait = 3 * pingPeriod
+
 	// outboundBuffer is how many messages may be queued for one connection
 	// before it is treated as unable to keep up.
 	outboundBuffer = 64

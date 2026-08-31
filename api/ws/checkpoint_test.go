@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/wsutil"
 
@@ -24,8 +25,13 @@ import (
 // TestMain silences the global logger: these tests open dozens of connections
 // and are meant to be run with -count=20, which makes the per-message logging
 // unreadable.
+//
+// It also installs a disabled validator, because the server now denies every
+// unauthenticated request (SEC-1). Tests that exercise authentication install
+// their own validator and restore this one.
 func TestMain(m *testing.M) {
 	log.SetOutput(io.Discard)
+	auth.SetShared(auth.NewDisabledValidator())
 
 	os.Exit(m.Run())
 }

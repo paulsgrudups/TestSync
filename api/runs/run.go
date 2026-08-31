@@ -20,11 +20,6 @@ import (
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
-var (
-	// SyncClient defines sync client credentials.
-	SyncClient utils.BasicCredentials
-)
-
 const (
 	cleanupInterval = 12 * time.Hour
 	cleanupAge      = 12 * time.Hour
@@ -46,7 +41,9 @@ func RegisterTestsRoutes(r *mux.Router) {
 	subrouter := r.PathPrefix(`/tests/{testID:\d+}`).
 		Subrouter().StrictSlash(false)
 
-	subrouter.Use(auth.BasicAuthMiddleware(auth.NewValidator(SyncClient)))
+	// The shared validator is resolved per request, so these routes cannot be
+	// registered before credentials are configured and end up open (SEC-1).
+	subrouter.Use(auth.SharedMiddleware())
 
 	startCleanupTicker()
 
@@ -169,6 +166,8 @@ func startCleanupTicker() {
 	ticker := time.NewTicker(cleanupInterval)
 
 	go func() {
+		defer utils.RecoverGoroutine("test cleanup")
+
 		for range ticker.C {
 			deleteLimit := time.Now().Add(-cleanupAge)
 

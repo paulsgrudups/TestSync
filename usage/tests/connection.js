@@ -8,9 +8,22 @@ const WebSocketAsPromised = require("websocket-as-promised");
 
 module.exports = {
   test: async (client) => {
+    // TestSync requires credentials unless the server was started with
+    // authentication explicitly disabled. They are sent in the Authorization
+    // header; the ?username=&password= query fallback is deprecated because
+    // query strings end up in proxy and access logs.
+    const user = process.env.TESTSYNC_USER || "";
+    const pass = process.env.TESTSYNC_PASS || "";
+    const headers = user || pass
+      ? {
+          Authorization:
+            "Basic " + Buffer.from(user + ":" + pass).toString("base64"),
+        }
+      : null;
+
     // Initialize the WebSocket
     const wsp = new WebSocketAsPromised("ws://localhost:9105/register/1", {
-      createWebSocket: (url) => new W3CWebSocket(url),
+      createWebSocket: (url) => new W3CWebSocket(url, null, null, headers),
       packMessage: (data) => JSON.stringify(data),
       unpackMessage: (data) => JSON.parse(data),
     });

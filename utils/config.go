@@ -16,6 +16,15 @@ const (
 
 	// DefaultSQLitePath is the database path used when none is configured.
 	DefaultSQLitePath = "./testsync.db"
+
+	// AuthModeBasic requires HTTP Basic credentials on every request. It is
+	// the default and the only secure mode.
+	AuthModeBasic = "basic"
+
+	// AuthModeNone disables authentication entirely. It is an explicit
+	// opt-out for local development and is announced with a warning banner on
+	// every startup.
+	AuthModeNone = "none"
 )
 
 // Config defines the basic configurable parameters for the service.
@@ -23,6 +32,7 @@ type Config struct {
 	HTTPPort   int              `json:"http_port"`
 	WSPort     int              `json:"ws_port"`
 	Logging    LogConfig        `json:"logging"`
+	Auth       AuthConfig       `json:"auth"`
 	SyncClient BasicCredentials `json:"sync_client"`
 	Storage    StorageConfig    `json:"storage"`
 }
@@ -31,6 +41,14 @@ type Config struct {
 type BasicCredentials struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+// AuthConfig defines how incoming requests are authenticated.
+type AuthConfig struct {
+	// Mode selects the authentication mode. "basic" (the default) requires the
+	// sync_client credentials on every request; "none" disables authentication
+	// entirely and must only be used on a trusted development machine.
+	Mode string `json:"mode"`
 }
 
 // LogConfig defines configuration variables for logging settings.
@@ -60,6 +78,10 @@ type StorageConfig struct {
 func ApplyDefaults(conf *Config) {
 	if conf == nil {
 		return
+	}
+
+	if conf.Auth.Mode == "" {
+		conf.Auth.Mode = AuthModeBasic
 	}
 
 	if conf.Logging.Level == "" {

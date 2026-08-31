@@ -15,6 +15,7 @@ import (
 
 	"github.com/paulsgrudups/testsync/api"
 
+	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/api/ws"
 	"github.com/paulsgrudups/testsync/storage"
@@ -29,6 +30,10 @@ var (
 	help      = pflag.BoolP("help", "h", false, "show help")
 	configDir = pflag.StringP(
 		"configDir", "c", "./config", "configuration file directory",
+	)
+	insecureNoAuth = pflag.Bool(
+		"insecure-no-auth", false,
+		"disable authentication entirely; development only",
 	)
 )
 
@@ -85,6 +90,10 @@ func main() {
 		DisableLevelTruncation: true,
 	})
 
+	if err := setupAuth(conf, *insecureNoAuth); err != nil {
+		fatalAuth(err)
+	}
+
 	if t := strings.ToLower(conf.Storage.Type); t != "" && t != utils.StorageTypeSQLite {
 		log.Warnf(
 			"Storage type %q is no longer supported; using sqlite instead",
@@ -102,9 +111,6 @@ func main() {
 	runs.SetDataStore(store)
 
 	wsServer := ws.StartWebSocketServer(conf.WSPort)
-
-	runs.SyncClient = conf.SyncClient
-	ws.SyncClient = conf.SyncClient
 
 	handler, err := api.HandleRoutes()
 	if err != nil {
@@ -142,4 +148,53 @@ func main() {
 	wsServer.Shutdown(context.Background()) //nolint:gosec,errcheck // graceful shutdown; errors are non-fatal here
 
 	log.Info("GOODBYE")
+}
+
+// setupAuth resolves the process-wide credential validator and installs it for
+// both the HTTP and the WebSocket server. Authentication is required unless it
+// is explicitly disabled, in which case every startup says so loudly (SEC-1).
+func setupAuth(conf utils.Config, insecure bool) error {
+	authConf := conf.Auth
+	if insecure {
+		authConf.Mode = utils.AuthModeNone
+	}
+
+	validator, err := auth.NewFromConfig(authConf, conf.SyncClient)
+	if err != nil {
+		return err
+	}
+
+	if validator.Disabled() {
+		log.Warn("****************************************************************")
+		log.Warn("** AUTHENTICATION IS DISABLED (auth mode \"none\").")
+		log.Warn("** Anyone who can reach these ports may read, overwrite and")
+		log.Warn("** release the data of every test run.")
+		log.Warn("** Use this only on a trusted development machine.")
+		log.Warn("****************************************************************")
+	}
+
+	auth.SetShared(validator)
+
+	return nil
+}
+
+// fatalAuth reports an unusable authentication configuration and stops the
+// process. The message goes to stderr as well as the log, because the log is
+// usually a file the operator is not watching while starting the server.
+func fatalAuth(err error) {
+	msg := fmt.Sprintf(`Refusing to start: %s
+
+TestSync requires authentication. Configure credentials in configuration.json:
+
+  "sync_client": {"username": "...", "password": "..."}
+
+To run without authentication (development machines only), opt out explicitly:
+
+  "auth": {"mode": "none"}
+
+or start the server with --insecure-no-auth.`, err)
+
+	log.Error(msg)
+	fmt.Fprintln(os.Stderr, msg)
+	os.Exit(1)
 }

@@ -3,6 +3,7 @@ package utils
 import (
 	"encoding/json"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -55,6 +56,51 @@ func LogRequests(next http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(handler)
+}
+
+// RecoverPanics returns a handler that turns a panic in any handler below it
+// into a logged stack trace and a 500 response. net/http recovers panics in the
+// handler goroutine, but http.TimeoutHandler re-panics them in the caller's
+// goroutine, so the server needs its own net.
+func RecoverPanics(next http.Handler) http.Handler {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			rec := recover()
+			if rec == nil {
+				return
+			}
+
+			// net/http's own signal for "abort this connection quietly": it
+			// is compared by identity, never wrapped.
+			if rec == http.ErrAbortHandler {
+				panic(rec)
+			}
+
+			log.Errorf(
+				"Recovered panic while serving %s %s: %v\n%s",
+				r.Method, r.URL.Path, rec, debug.Stack(),
+			)
+
+			HTTPError(w, "Internal server error", http.StatusInternalServerError)
+		}()
+
+		next.ServeHTTP(w, r)
+	}
+
+	return http.HandlerFunc(handler)
+}
+
+// RecoverGoroutine recovers a panic in the goroutine it is deferred in and logs
+// it with a stack trace, so that one connection's bug cannot take down the
+// process and every other agent's run with it. Defer it as the first statement
+// of every spawned goroutine, so that it runs after the goroutine's own
+// cleanup.
+func RecoverGoroutine(name string) {
+	if rec := recover(); rec != nil {
+		log.Errorf(
+			"Recovered panic in %s goroutine: %v\n%s", name, rec, debug.Stack(),
+		)
+	}
 }
 
 // HTTPError writes Loadero's default error response.
