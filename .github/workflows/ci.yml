@@ -47,11 +47,14 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Install golangci-lint
+        run: |
+          # Install golangci-lint v2.13.2 to GOPATH/bin
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.13.2
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: v2.13.2
-          args: run ./...
+        run: golangci-lint run ./...
 
       - name: List repository (debug)
         if: ${{ github.event_name == 'pull_request' }}
