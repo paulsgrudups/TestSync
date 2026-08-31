@@ -84,26 +84,21 @@ func main() {
 		DisableLevelTruncation: true,
 	})
 
-	storageType := strings.ToLower(conf.Storage.Type)
-	switch storageType {
-	case "", "memory":
-		runs.SetDataStore(storage.NewMemoryStore())
-	case "sqlite":
-		sqlitePath := conf.Storage.SQLitePath
-		if sqlitePath == "" {
-			sqlitePath = "testsync.db"
-		}
-
-		store, err := storage.NewSQLiteStore(sqlitePath)
-		if err != nil {
-			panic(err)
-		}
-
-		runs.SetDataStore(store)
-	default:
-		log.Warnf("Unknown storage type %q, defaulting to memory", conf.Storage.Type)
-		runs.SetDataStore(storage.NewMemoryStore())
+	if t := strings.ToLower(conf.Storage.Type); t != "" && t != utils.StorageTypeSQLite {
+		log.Warnf(
+			"Storage type %q is no longer supported; using sqlite instead",
+			conf.Storage.Type,
+		)
 	}
+
+	store, err := storage.NewSQLiteStore(conf.Storage.SQLitePath)
+	if err != nil {
+		panic(err)
+	}
+
+	log.Infof("Using sqlite data store at %q", store.Path())
+
+	runs.SetDataStore(store)
 
 	wsServer := ws.StartWebSocketServer(conf.WSPort)
 
@@ -138,7 +133,7 @@ func main() {
 
 	<-stop
 
-	if err := runs.Store.Close(); err != nil {
+	if err := store.Close(); err != nil {
 		log.Errorf("Failed to close data store: %s", err.Error())
 	}
 

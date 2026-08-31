@@ -1,39 +1,38 @@
 package runs
 
 import (
+	"errors"
 	"time"
 
 	"github.com/paulsgrudups/testsync/storage"
 )
 
-// Store holds the active data store.
-var Store storage.DataStore = storage.NewMemoryStore()
+// ErrNoDataStore indicates the data store has not been initialised. Callers
+// must invoke SetDataStore during startup before serving any request.
+var ErrNoDataStore = errors.New("data store not initialised")
 
-// SetDataStore sets the active data store.
+// Store holds the active data store. It is nil until SetDataStore is called.
+var Store storage.DataStore
+
+// SetDataStore sets the active data store and rebinds DefaultService to it.
+// It must be called during startup, before any route is registered: services
+// resolve their store once, at construction, so anything built earlier would
+// hold a nil store for the process lifetime.
 func SetDataStore(store storage.DataStore) {
 	if store == nil {
 		return
 	}
 
 	Store = store
+	DefaultService = NewService(store)
 }
 
-// SaveData persists test data.
-func SaveData(testID int, data []byte) error {
-	return Store.SaveData(testID, data)
-}
-
-// LoadData retrieves test data.
-func LoadData(testID int) ([]byte, bool, error) {
-	return Store.LoadData(testID)
-}
-
-// DeleteData removes test data.
-func DeleteData(testID int) error {
-	return Store.DeleteData(testID)
-}
-
-// DeleteDataOlderThan removes test data older than limit.
+// DeleteDataOlderThan removes test data older than limit. It is called from
+// the background cleanup ticker, which can outlive a failed startup.
 func DeleteDataOlderThan(limit time.Time) error {
+	if Store == nil {
+		return ErrNoDataStore
+	}
+
 	return Store.DeleteOlderThan(limit)
 }

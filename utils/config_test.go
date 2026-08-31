@@ -65,7 +65,7 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.Logging.Dir != "." {
 		t.Fatalf("expected default log dir '.', got %q", cfg.Logging.Dir)
 	}
-	if cfg.Storage.Type != "memory" {
-		t.Fatalf("expected default storage type memory, got %q", cfg.Storage.Type)
+	if cfg.Storage.SQLitePath != DefaultSQLitePath {
+		t.Fatalf("expected default sqlite path %q, got %q", DefaultSQLitePath, cfg.Storage.SQLitePath)
 	}
 }

@@ -9,14 +9,13 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/storage"
+	"github.com/paulsgrudups/testsync/internal/storagetest"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
 func TestWebSocketCommands(t *testing.T) {
 	runs.AllTests = make(map[int]*runs.Test)
-	runs.SetDataStore(storage.NewMemoryStore())
-	runs.DefaultService = runs.NewService(nil)
+	runs.SetDataStore(storagetest.NewStore(t))
 
 	server := &Server{Handler: NewCommandHandler(nil)}
 	httpServer := httptest.NewServer(newWSRouter(server))

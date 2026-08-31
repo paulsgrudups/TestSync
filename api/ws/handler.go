@@ -47,10 +47,11 @@ func (h *CommandHandler) Handle(testID int, connIdx int, body []byte, t *runs.Te
 			return err
 		}
 
+		// A test with no stored data is not an error here: the agent gets an
+		// empty message rather than a failure.
 		data, err := h.service.ReadTestData(testID)
-		if err != nil && stderrors.Is(err, runs.ErrTestNotFound) {
-			data = t.GetData()
-			err = nil
+		if stderrors.Is(err, runs.ErrTestNotFound) {
+			data, err = nil, nil
 		}
 		if err != nil {
 			return errors.Wrap(err, "could not load data")

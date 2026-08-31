@@ -8,12 +8,15 @@ import (
 	"testing"
 
 	"github.com/paulsgrudups/testsync/api/runs"
+	"github.com/paulsgrudups/testsync/internal/storagetest"
 	"github.com/paulsgrudups/testsync/utils"
 )
 
 func TestCreateAndReadTestData(t *testing.T) {
 	runs.SyncClient = utils.BasicCredentials{Username: "user", Password: "pass"}
 	runs.AllTests = make(map[int]*runs.Test)
+
+	runs.SetDataStore(storagetest.NewStore(t))
 
 	handler, err := HandleRoutes()
 	if err != nil {

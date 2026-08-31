@@ -12,7 +12,7 @@ Lightweight test agent synchronization over HTTP and WebSocket. Store test data,
 ## What it does
 - Store per-test data via HTTP and fetch it later
 - Coordinate agents with WebSocket checkpoints
-- Optional persistence via SQLite
+- Persistence via SQLite
 
 ## Quickstart
 1) Install Go
@@ -93,9 +93,17 @@ Checkpoint content:
 ```
 
 ## Storage
-Storage options:
-- memory (default)
-- sqlite (persist test data on disk)
+Test data is persisted in a local SQLite database. There is no in-memory
+backend; the database is the single source of truth.
+
+- `storage.sqlite_path` sets the database file. Defaults to `./testsync.db`.
+- The database and any missing parent directories are created on startup when
+  they do not already exist, so a first run needs no setup step.
+- If the configured path holds a file that is not a usable database, it is
+  moved aside to `<path>.corrupt-<timestamp>` and a fresh database is created
+  in its place. Startup logs a warning when this happens.
+- `storage.type` is accepted for backwards compatibility. `sqlite` is the only
+  supported value; any other value logs a warning and is ignored.
 
 ## E2E validation
 E2E script: [usage/e2e/main.go](usage/e2e/main.go)

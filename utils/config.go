@@ -9,6 +9,14 @@ import (
 // FS holds implementation of functions provided by os package.
 var FS = afero.NewOsFs()
 
+const (
+	// StorageTypeSQLite is the only supported storage backend.
+	StorageTypeSQLite = "sqlite"
+
+	// DefaultSQLitePath is the database path used when none is configured.
+	DefaultSQLitePath = "./testsync.db"
+)
+
 // Config defines the basic configurable parameters for the service.
 type Config struct {
 	HTTPPort   int              `json:"http_port"`
@@ -37,10 +45,13 @@ type LogConfig struct {
 
 // StorageConfig defines storage settings for test data.
 type StorageConfig struct {
-	// Type can be "memory" or "sqlite".
+	// Type is retained for backwards compatibility with older configuration
+	// files. The only supported value is "sqlite"; anything else is ignored
+	// with a warning at startup.
 	Type string `json:"type"`
 
-	// SQLitePath defines the sqlite db path when Type is "sqlite".
+	// SQLitePath defines the sqlite db path. The database is created if it
+	// does not already exist. Defaults to "./testsync.db".
 	SQLitePath string `json:"sqlite_path"`
 }
 
@@ -58,8 +69,8 @@ func ApplyDefaults(conf *Config) {
 		conf.Logging.Dir = "."
 	}
 
-	if conf.Storage.Type == "" {
-		conf.Storage.Type = "memory"
+	if conf.Storage.SQLitePath == "" {
+		conf.Storage.SQLitePath = DefaultSQLitePath
 	}
 }
 
