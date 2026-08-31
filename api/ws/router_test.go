@@ -14,7 +14,9 @@ import (
 )
 
 func TestWebSocketCommands(t *testing.T) {
-	runs.AllTests = make(map[int]*runs.Test)
+	// DeleteTest holds the registry lock, unlike replacing runs.AllTests
+	// wholesale, which races the connection goroutines that read it (CONC-12).
+	runs.DeleteTest(1)
 	runs.SetDataStore(storagetest.NewStore(t))
 
 	server := &Server{Handler: NewCommandHandler(nil)}

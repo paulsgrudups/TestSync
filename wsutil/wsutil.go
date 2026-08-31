@@ -41,11 +41,12 @@ func Connect(url string) (*websocket.Conn, *http.Response, error) {
 	return websocket.DefaultDialer.Dial(url, http.Header{})
 }
 
-// SendMessage marshals and sends a message in the provided WebSocket
-// connection. This function uses Message struct to send messages in correct
-// format.
-func SendMessage(conn *websocket.Conn, cmd string, content interface{}) error {
-	if conn == nil {
+// SendMessage marshals and queues a message for the provided WebSocket
+// client. This function uses Message struct to send messages in correct
+// format. The message is written by the client's own writer, so this call
+// never blocks and never races another writer.
+func SendMessage(client *Client, cmd string, content interface{}) error {
+	if client == nil {
 		return errors.New("no websocket connection provided")
 	}
 
@@ -62,7 +63,7 @@ func SendMessage(conn *websocket.Conn, cmd string, content interface{}) error {
 		return errors.Wrap(err, "could not marshal message for WebSocket")
 	}
 
-	err = conn.WriteMessage(websocket.TextMessage, message)
+	err = client.Send(websocket.TextMessage, message)
 	if err != nil {
 		return errors.Wrap(err, "could not send WebSocket message")
 	}

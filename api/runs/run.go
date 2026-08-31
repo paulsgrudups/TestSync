@@ -13,9 +13,9 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/gorilla/mux"
-	"github.com/gorilla/websocket"
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/utils"
+	"github.com/paulsgrudups/testsync/wsutil"
 	"github.com/pkg/errors"
 )
 
@@ -34,9 +34,9 @@ const (
 type Test struct {
 	Created     time.Time
 	Data        []byte
-	Connections []*websocket.Conn
-	CheckPoints map[string]*Checkpoint
+	Connections []*wsutil.Client
 	ForceEnd    bool
+	checkPoints map[string]*checkpoint
 	mu          sync.RWMutex
 }
 

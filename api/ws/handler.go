@@ -42,7 +42,7 @@ func (h *CommandHandler) Handle(testID int, connIdx int, body []byte, t *runs.Te
 
 	switch m.Command {
 	case CommandReadData:
-		conn, err := getConn(t, connIdx)
+		client, err := getClient(t, connIdx)
 		if err != nil {
 			return err
 		}
@@ -57,7 +57,7 @@ func (h *CommandHandler) Handle(testID int, connIdx int, body []byte, t *runs.Te
 			return errors.Wrap(err, "could not load data")
 		}
 
-		return conn.WriteMessage(websocket.BinaryMessage, data)
+		return client.Send(websocket.BinaryMessage, data)
 	case CommandUpdateData:
 		if err := h.service.UpdateTestData(testID, m.Content.Bytes); err != nil {
 			return errors.Wrap(err, "could not store data")
@@ -65,41 +65,43 @@ func (h *CommandHandler) Handle(testID int, connIdx int, body []byte, t *runs.Te
 
 		return nil
 	case CommandGetConnectionCount:
-		conn, err := getConn(t, connIdx)
+		client, err := getClient(t, connIdx)
 		if err != nil {
 			return err
 		}
 
 		return wsutil.SendMessage(
-			conn,
+			client,
 			CommandGetConnectionCount,
 			struct {
 				Count int `json:"count"`
 			}{Count: t.ConnectionCount()},
 		)
 	case CommandWaitCheckpoint:
-		if _, err := getConn(t, connIdx); err != nil {
+		if _, err := getClient(t, connIdx); err != nil {
 			return err
 		}
 
 		return waitCheckPoint(m.Content.Bytes, connIdx, t)
 	case CommandClose:
-		conn, err := getConn(t, connIdx)
+		client, err := getClient(t, connIdx)
 		if err != nil {
 			return err
 		}
 
-		return conn.Close()
+		client.Close()
+
+		return nil
 	default:
 		return errors.Errorf("received non existing command: %s", m.Command)
 	}
 }
 
-func getConn(t *runs.Test, idx int) (*websocket.Conn, error) {
-	conn := t.GetConnection(idx)
-	if conn == nil {
+func getClient(t *runs.Test, idx int) (*wsutil.Client, error) {
+	client := t.GetConnection(idx)
+	if client == nil {
 		return nil, errors.New("connection not found")
 	}
 
-	return conn, nil
+	return client, nil
 }

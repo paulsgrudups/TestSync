@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/utils"
+	"github.com/paulsgrudups/testsync/wsutil"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -64,34 +65,22 @@ func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) reader(conn *websocket.Conn, testID int) {
-	closeC := make(chan bool)
-	defer close(closeC)
+	// The client owns every write to this connection, including keepalive
+	// pings: gorilla/websocket panics on concurrent writers, and a checkpoint
+	// release is written by whichever agent completed the barrier.
+	client := wsutil.NewClient(conn)
+	go client.WritePump()
 
-	go func() {
-		for {
-			select {
-			case <-closeC:
-				return
-			case <-time.After(10 * time.Second):
-				err := conn.WriteMessage(websocket.PingMessage, []byte("ping"))
-				if err != nil {
-					log.Errorf(
-						"Could not send WS ping message: %s", err.Error(),
-					)
-				}
-			}
-		}
-	}()
+	defer client.Close()
 
 	r := runs.EnsureTest(testID, func() *runs.Test {
 		return &runs.Test{
 			Created:     time.Now(),
-			Connections: []*websocket.Conn{},
-			CheckPoints: make(map[string]*runs.Checkpoint),
+			Connections: []*wsutil.Client{},
 		}
 	})
 
-	idx := r.AddConnection(conn)
+	idx := r.AddConnection(client)
 
 	for {
 		messageType, p, err := conn.ReadMessage()
@@ -107,8 +96,6 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 					testID, err.Error(),
 				)
 			}
-
-			closeC <- true
 
 			return
 		}

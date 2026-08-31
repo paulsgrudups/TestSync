@@ -1,6 +1,6 @@
 package runs
 
-import "github.com/gorilla/websocket"
+import "github.com/paulsgrudups/testsync/wsutil"
 
 // GetData returns test data safely.
 func (t *Test) GetData() []byte {
@@ -19,7 +19,7 @@ func (t *Test) SetData(data []byte) {
 }
 
 // AddConnection appends a connection and returns its index.
-func (t *Test) AddConnection(conn *websocket.Conn) int {
+func (t *Test) AddConnection(conn *wsutil.Client) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -28,7 +28,7 @@ func (t *Test) AddConnection(conn *websocket.Conn) int {
 }
 
 // GetConnection returns a connection by index.
-func (t *Test) GetConnection(idx int) *websocket.Conn {
+func (t *Test) GetConnection(idx int) *wsutil.Client {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -48,31 +48,54 @@ func (t *Test) ConnectionCount() int {
 }
 
 // GetConnectionsSnapshot returns a snapshot of connections.
-func (t *Test) GetConnectionsSnapshot() []*websocket.Conn {
+func (t *Test) GetConnectionsSnapshot() []*wsutil.Client {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	conns := make([]*websocket.Conn, len(t.Connections))
+	conns := make([]*wsutil.Client, len(t.Connections))
 	copy(conns, t.Connections)
 
 	return conns
 }
 
-// EnsureCheckpoint gets or creates a checkpoint.
-func (t *Test) EnsureCheckpoint(identifier string, target int) *Checkpoint {
+// JoinCheckpoint registers a connection as a member of the named checkpoint,
+// creating the checkpoint the first time an identifier is seen. Joining twice
+// from the same connection is a no-op: a barrier releases on distinct agents.
+//
+// The call never blocks. When this join is the one that reaches the target
+// count, every member is notified before the call returns.
+//
+// It reports whether the checkpoint had already been released beforehand, in
+// which case the caller arrived too late to take part in it.
+func (t *Test) JoinCheckpoint(identifier string, target, connIdx int) bool {
+	cp := t.ensureCheckpoint(identifier, target)
+
+	// t.mu is released before cp.mu is taken, and cp.mu before the broadcast
+	// takes t.mu again for a connection snapshot: the two locks are never held
+	// at the same time.
+	alreadyReleased, notify := cp.join(connIdx)
+	if len(notify) > 0 {
+		cp.broadcastStatus(t, notify)
+	}
+
+	return alreadyReleased
+}
+
+// ensureCheckpoint gets or creates a checkpoint.
+func (t *Test) ensureCheckpoint(identifier string, target int) *checkpoint {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if cp, ok := t.CheckPoints[identifier]; ok {
+	if cp, ok := t.checkPoints[identifier]; ok {
 		return cp
 	}
 
-	if t.CheckPoints == nil {
-		t.CheckPoints = make(map[string]*Checkpoint)
+	if t.checkPoints == nil {
+		t.checkPoints = make(map[string]*checkpoint)
 	}
 
-	cp := CreateCheckpoint(identifier, target, t)
-	t.CheckPoints[identifier] = cp
+	cp := newCheckpoint(identifier, target)
+	t.checkPoints[identifier] = cp
 
 	return cp
 }

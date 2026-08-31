@@ -54,9 +54,8 @@ func (s *Service) CreateTestData(testID int, data []byte) error {
 		t.SetData(data)
 	} else {
 		SetTest(testID, &Test{
-			Created:     nowUTC(),
-			Data:        data,
-			CheckPoints: make(map[string]*Checkpoint),
+			Created: nowUTC(),
+			Data:    data,
 		})
 	}
 
@@ -73,9 +72,8 @@ func (s *Service) UpdateTestData(testID int, data []byte) error {
 		t.SetData(data)
 	} else {
 		SetTest(testID, &Test{
-			Created:     nowUTC(),
-			Data:        data,
-			CheckPoints: make(map[string]*Checkpoint),
+			Created: nowUTC(),
+			Data:    data,
 		})
 	}
 
