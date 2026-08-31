@@ -45,7 +45,7 @@ func Connect(url string) (*websocket.Conn, *http.Response, error) {
 // client. This function uses Message struct to send messages in correct
 // format. The message is written by the client's own writer, so this call
 // never blocks and never races another writer.
-func SendMessage(client *Client, cmd string, content interface{}) error {
+func SendMessage(client *Client, cmd string, content any) error {
 	if client == nil {
 		return errors.New("no websocket connection provided")
 	}

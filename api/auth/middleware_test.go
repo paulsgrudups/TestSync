@@ -10,7 +10,7 @@ import (
 
 func TestBasicAuthMiddleware_Unauthorized(t *testing.T) {
 	validator := NewValidator(utils.BasicCredentials{Username: "user", Password: "pass"})
-	handler := BasicAuthMiddleware(validator)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BasicAuthMiddleware(validator)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -25,7 +25,7 @@ func TestBasicAuthMiddleware_Unauthorized(t *testing.T) {
 
 func TestBasicAuthMiddleware_Authorized(t *testing.T) {
 	validator := NewValidator(utils.BasicCredentials{Username: "user", Password: "pass"})
-	handler := BasicAuthMiddleware(validator)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := BasicAuthMiddleware(validator)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

@@ -1,3 +1,4 @@
+// Package api contains tests for the API handlers.
 package api
 
 import (

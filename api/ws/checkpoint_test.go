@@ -1,3 +1,4 @@
+// Package ws contains WebSocket server tests.
 package ws
 
 import (
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/wsutil"
 
@@ -70,7 +72,10 @@ func newAgent(t *testing.T, server *httptest.Server, testID int) *agent {
 		"ws%s/register/%d", strings.TrimPrefix(server.URL, "http"), testID,
 	)
 
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatalf("failed to dial %s: %v", url, err)
 	}
@@ -111,18 +116,21 @@ func (a *agent) readLoop() {
 func (a *agent) close() {
 	a.closeOnce.Do(func() {
 		close(a.done)
-		a.conn.Close() //nolint:errcheck
+		if err := a.conn.Close(); err != nil {
+			// Best-effort close in tests; log for visibility
+			log.Debugf("failed to close agent connection: %v", err)
+		}
 	})
 }
 
-func (a *agent) send(command string, content interface{}) {
+func (a *agent) send(command string, content any) {
 	if err := writeWS(a.conn, command, content); err != nil {
 		a.t.Errorf("failed to send %s: %v", command, err)
 	}
 }
 
 func (a *agent) waitCheckpoint(identifier string, target int) {
-	a.send(CommandWaitCheckpoint, map[string]interface{}{
+	a.send(CommandWaitCheckpoint, map[string]any{
 		"identifier":   identifier,
 		"target_count": target,
 	})
@@ -229,7 +237,7 @@ func TestCheckpointRejectsRepeatedJoinsFromOneConnection(t *testing.T) {
 	server := newCheckpointTestServer(t, testID)
 
 	first := newAgent(t, server, testID)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		first.waitCheckpoint("solo", 2)
 	}
 
@@ -266,7 +274,7 @@ func TestCheckpointRejectsInvalidRequests(t *testing.T) {
 
 	server := newCheckpointTestServer(t, testID)
 
-	tests := map[string]map[string]interface{}{
+	tests := map[string]map[string]any{
 		"missing target count":  {"identifier": "no-target"},
 		"zero target count":     {"identifier": "zero", "target_count": 0},
 		"negative target count": {"identifier": "negative", "target_count": -1},

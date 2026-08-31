@@ -1,6 +1,9 @@
 package runs
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 // AllTests holds all registered tests (compatibility). Use helpers for access.
 var (
@@ -52,9 +55,7 @@ func EnsureTest(id int, create func() *Test) *Test {
 func RangeTests(fn func(id int, t *Test)) {
 	allTestsMu.RLock()
 	snapshot := make(map[int]*Test, len(AllTests))
-	for id, t := range AllTests {
-		snapshot[id] = t
-	}
+	maps.Copy(snapshot, AllTests)
 	allTestsMu.RUnlock()
 
 	for id, t := range snapshot {

@@ -19,6 +19,7 @@ type ErrorResponse struct {
 
 type responseWriter struct {
 	http.ResponseWriter
+
 	statusCode int
 }
 
@@ -42,7 +43,7 @@ func LogRequests(next http.Handler) http.Handler {
 
 		next.ServeHTTP(rw, r)
 
-		reqPath := strings.Split(r.RequestURI, "?")[0]
+		reqPath, _, _ := strings.Cut(r.RequestURI, "?")
 		if len(strings.Split(r.RequestURI, "?")) > 1 {
 			reqPath += "?"
 		}
@@ -61,9 +62,11 @@ func HTTPError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(code)
 
-	// error is not handled - possible in very rare occasions
-	json.NewEncoder(w).Encode(ErrorResponse{ // nolint: errcheck
+	// write error response and log if it fails
+	if err := json.NewEncoder(w).Encode(ErrorResponse{
 		Code:  code,
 		Error: message,
-	})
+	}); err != nil {
+		log.Debugf("failed to write error response: %v", err)
+	}
 }

@@ -1,11 +1,13 @@
+// Package runs contains test run and checkpoint logic.
 package runs
 
 import (
 	"sync"
 	"time"
 
-	"github.com/paulsgrudups/testsync/wsutil"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/paulsgrudups/testsync/wsutil"
 )
 
 // checkpointLeadTime is how far in the future the agents are told to resume,
@@ -41,7 +43,7 @@ func newCheckpoint(identifier string, target int) *checkpoint {
 // join adds a connection to the barrier's member set. It never blocks. It
 // reports whether the barrier had already been released before this call, and
 // the members to notify when this join is the one that reached the target.
-func (cp *checkpoint) join(connIdx int) (alreadyReleased bool, notify []int) {
+func (cp *checkpoint) join(connIdx int) (bool, []int) {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 
@@ -66,7 +68,7 @@ func (cp *checkpoint) join(connIdx int) (alreadyReleased bool, notify []int) {
 	// branch above instead.
 	close(cp.released)
 
-	notify = make([]int, 0, len(cp.members))
+	notify := make([]int, 0, len(cp.members))
 	for idx := range cp.members {
 		notify = append(notify, idx)
 	}

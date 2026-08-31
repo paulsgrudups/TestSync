@@ -250,7 +250,7 @@ func TestSQLiteStore_LeavesNoStaleSidecarsAfterRecreate(t *testing.T) {
 	// itself while failing to open, but the recreate path must not restore
 	// them either.
 	for _, suffix := range []string{"-wal", "-shm"} {
-		data, err := os.ReadFile(dbPath + suffix)
+		data, err := os.ReadFile(dbPath + suffix) //nolint:gosec
 		if err != nil {
 			continue // absent is fine
 		}

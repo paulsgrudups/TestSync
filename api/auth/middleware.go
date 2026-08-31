@@ -1,3 +1,4 @@
+// Package auth provides authentication middleware helpers.
 package auth
 
 import (

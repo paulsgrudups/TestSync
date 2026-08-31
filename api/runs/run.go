@@ -13,10 +13,11 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/gorilla/mux"
+	"github.com/pkg/errors"
+
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
-	"github.com/pkg/errors"
 )
 
 var (
@@ -119,7 +120,7 @@ func readBodyData(w http.ResponseWriter, body io.ReadCloser) ([]byte, error) {
 		return nil, nil
 	}
 
-	defer body.Close() //nolint:errcheck
+	defer body.Close()
 
 	bodyContent, err := io.ReadAll(http.MaxBytesReader(w, body, maxBodyBytes))
 	if err != nil {
@@ -161,7 +162,7 @@ func GetPathID(
 
 func writeResponse(w http.ResponseWriter, resp []byte, code int) {
 	w.WriteHeader(code)
-	w.Write(resp) // nolint: gosec, errcheck
+	w.Write(resp) //nolint: gosec, errcheck
 }
 
 func startCleanupTicker() {

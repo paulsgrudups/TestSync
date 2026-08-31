@@ -1,3 +1,4 @@
+// Package main is the TestSync server entrypoint.
 package main
 
 import (
@@ -65,7 +66,7 @@ func main() {
 		logDir = "."
 	}
 
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0750); err != nil {
 		log.Infof("Failed to create log dir, using stderr: %s", err.Error())
 		log.SetOutput(os.Stderr)
 	} else {
@@ -137,8 +138,8 @@ func main() {
 		log.Errorf("Failed to close data store: %s", err.Error())
 	}
 
-	server.Shutdown(context.Background())   // nolint: gosec, errcheck
-	wsServer.Shutdown(context.Background()) // nolint: gosec, errcheck
+	server.Shutdown(context.Background())   //nolint:gosec,errcheck // graceful shutdown; errors are non-fatal here
+	wsServer.Shutdown(context.Background()) //nolint:gosec,errcheck // graceful shutdown; errors are non-fatal here
 
 	log.Info("GOODBYE")
 }

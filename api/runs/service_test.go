@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/paulsgrudups/testsync/internal/storagetest"
@@ -31,7 +32,7 @@ func TestService_CreateDuplicate(t *testing.T) {
 		t.Fatalf("create failed: %v", err)
 	}
 
-	if err := service.CreateTestData(10, []byte("payload")); err != ErrTestExists {
+	if err := service.CreateTestData(10, []byte("payload")); !errors.Is(err, ErrTestExists) {
 		t.Fatalf("expected ErrTestExists, got %v", err)
 	}
 }

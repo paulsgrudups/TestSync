@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Server describes WebSocket server with available handler functions
+// Server describes WebSocket server with available handler functions.
 type Server struct {
 	HTTPServer *http.Server
 	Handler    *CommandHandler
@@ -25,7 +25,7 @@ func StartWebSocketServer(port int) *Server {
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  10 * time.Second,
 	}
-	go s.HTTPServer.ListenAndServe() // nolint: errcheck
+	go s.HTTPServer.ListenAndServe() //nolint:errcheck // listen error ignored because server shutdown is handled elsewhere
 
 	return s
 }

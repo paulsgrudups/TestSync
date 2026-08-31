@@ -6,9 +6,10 @@ import (
 
 	stderrors "errors"
 
+	"github.com/pkg/errors"
+
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/wsutil"
-	"github.com/pkg/errors"
 )
 
 // Command... describes available commands for websocket connection.

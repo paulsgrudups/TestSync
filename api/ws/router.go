@@ -7,6 +7,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
@@ -24,8 +25,10 @@ var (
 func newWSRouter(s *Server) http.Handler {
 	router := mux.NewRouter().StrictSlash(true)
 
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "WebSocket, reporting for duty!")
+	router.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := fmt.Fprintln(w, "WebSocket, reporting for duty!"); err != nil {
+			log.Debugf("failed to write ws root response: %v", err)
+		}
 	})
 
 	subrouter := router.PathPrefix("/register").Subrouter().StrictSlash(true)

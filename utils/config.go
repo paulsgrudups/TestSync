@@ -1,3 +1,4 @@
+// Package utils provides small helper utilities used across the project.
 package utils
 
 import (
@@ -75,11 +76,11 @@ func ApplyDefaults(conf *Config) {
 }
 
 // ReadConfig reads file into given config object.
-func ReadConfig(filename string, config interface{}) error {
-	file, err := afero.ReadFile(FS, filename) // nolint: gosec
+func ReadConfig(filename string, config any) error {
+	file, err := afero.ReadFile(FS, filename) //nolint:gosec // reading local config via afero is safe in tests/CI
 	if err != nil {
 		return err
 	}
 
-	return json.Unmarshal(file, &config)
+	return json.Unmarshal(file, config)
 }

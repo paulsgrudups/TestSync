@@ -1,3 +1,4 @@
+// Package main provides a small end-to-end flow runner used in CI/manual testing.
 package main
 
 import (
@@ -53,7 +54,7 @@ func httpCreate(baseURL string, testID int, payload []byte, user, pass string) e
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -74,7 +75,7 @@ func httpRead(baseURL string, testID int, payload []byte, user, pass string) err
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -100,17 +101,22 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 		header.Set("Authorization", "Basic "+basicAuth(user, pass))
 	}
 
-	conn, _, err := websocket.DefaultDialer.Dial(url, header)
+	conn, resp, err := websocket.DefaultDialer.Dial(url, header)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := writeWS(conn, "read_data", map[string]string{}); err != nil {
 		return err
 	}
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
 		return err
@@ -123,7 +129,9 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 		return err
 	}
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
 	_, msg, err = conn.ReadMessage()
 	if err != nil {
 		return err
@@ -146,14 +154,16 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 		return fmt.Errorf("unexpected connection count: %d", countPayload.Count)
 	}
 
-	if err := writeWS(conn, "wait_checkpoint", map[string]interface{}{
+	if err := writeWS(conn, "wait_checkpoint", map[string]any{
 		"identifier":   "checkpoint-1",
 		"target_count": 1,
 	}); err != nil {
 		return err
 	}
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
 	_, msg, err = conn.ReadMessage()
 	if err != nil {
 		return err
@@ -170,7 +180,7 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 	return nil
 }
 
-func writeWS(conn *websocket.Conn, command string, content interface{}) error {
+func writeWS(conn *websocket.Conn, command string, content any) error {
 	body, err := json.Marshal(content)
 	if err != nil {
 		return err

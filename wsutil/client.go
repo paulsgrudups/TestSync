@@ -1,3 +1,4 @@
+// Package wsutil provides utilities for WebSocket clients and messages.
 package wsutil
 
 import (
@@ -114,7 +115,9 @@ func (c *Client) WritePump() {
 	defer func() {
 		ping.Stop()
 		c.Close()
-		c.conn.Close() // nolint: errcheck
+		if err := c.conn.Close(); err != nil {
+			log.Debugf("failed to close underlying websocket connection: %v", err)
+		}
 	}()
 
 	for {

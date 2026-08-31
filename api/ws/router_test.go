@@ -1,3 +1,4 @@
+// Package ws contains WebSocket server tests.
 package ws
 
 import (
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/internal/storagetest"
 	"github.com/paulsgrudups/testsync/wsutil"
@@ -24,11 +26,14 @@ func TestWebSocketCommands(t *testing.T) {
 	defer httpServer.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/register/1"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatalf("failed to dial ws: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	updatePayload := map[string]string{"data": "value"}
 	if err := writeWS(conn, CommandUpdateData, updatePayload); err != nil {
@@ -39,7 +44,9 @@ func TestWebSocketCommands(t *testing.T) {
 		t.Fatalf("read_data failed: %v", err)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read_data response failed: %v", err)
@@ -57,7 +64,9 @@ func TestWebSocketCommands(t *testing.T) {
 		t.Fatalf("get_connection_count failed: %v", err)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
 	_, msg, err = conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("get_connection_count response failed: %v", err)
@@ -81,14 +90,16 @@ func TestWebSocketCommands(t *testing.T) {
 		t.Fatalf("expected count >= 1, got %d", countPayload.Count)
 	}
 
-	if err := writeWS(conn, CommandWaitCheckpoint, map[string]interface{}{
+	if err := writeWS(conn, CommandWaitCheckpoint, map[string]any{
 		"identifier":   "checkpoint-1",
 		"target_count": 1,
 	}); err != nil {
 		t.Fatalf("wait_checkpoint failed: %v", err)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
 	_, msg, err = conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("wait_checkpoint response failed: %v", err)
@@ -103,7 +114,7 @@ func TestWebSocketCommands(t *testing.T) {
 	}
 }
 
-func writeWS(conn *websocket.Conn, command string, content interface{}) error {
+func writeWS(conn *websocket.Conn, command string, content any) error {
 	body, err := json.Marshal(content)
 	if err != nil {
 		return err

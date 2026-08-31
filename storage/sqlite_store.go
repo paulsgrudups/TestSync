@@ -1,3 +1,4 @@
+// Package storage implements data storage backends used by TestSync.
 package storage
 
 import (
@@ -33,7 +34,7 @@ type SQLiteStore struct {
 // is created in its place so that a corrupted file never blocks startup.
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("could not create sqlite directory %q: %w", dir, err)
 		}
 	}
@@ -137,6 +138,7 @@ func (s *SQLiteStore) Path() string {
 	return s.path
 }
 
+// SaveData stores or updates the blob for the given test ID.
 func (s *SQLiteStore) SaveData(testID int, data []byte) error {
 	_, err := s.db.Exec(
 		`INSERT INTO test_data (test_id, data, created_at)
@@ -149,6 +151,8 @@ func (s *SQLiteStore) SaveData(testID int, data []byte) error {
 	return err
 }
 
+// LoadData returns stored data for a test ID. The boolean indicates whether
+// the row existed.
 func (s *SQLiteStore) LoadData(testID int) ([]byte, bool, error) {
 	row := s.db.QueryRow(`SELECT data FROM test_data WHERE test_id = ?`, testID)
 	var data []byte
@@ -162,16 +166,19 @@ func (s *SQLiteStore) LoadData(testID int) ([]byte, bool, error) {
 	return data, true, nil
 }
 
+// DeleteData removes data for the given test ID.
 func (s *SQLiteStore) DeleteData(testID int) error {
 	_, err := s.db.Exec(`DELETE FROM test_data WHERE test_id = ?`, testID)
 	return err
 }
 
+// DeleteOlderThan deletes rows older than the provided limit.
 func (s *SQLiteStore) DeleteOlderThan(limit time.Time) error {
 	_, err := s.db.Exec(`DELETE FROM test_data WHERE created_at < ?`, limit.UnixMilli())
 	return err
 }
 
+// Close closes the underlying database.
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }

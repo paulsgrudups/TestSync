@@ -1,3 +1,4 @@
+// Package api provides HTTP API handlers.
 package api
 
 import (
@@ -11,6 +12,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // HandleRoutes registers all routes.
@@ -22,11 +25,13 @@ func HandleRoutes() (http.Handler, error) {
 		return nil, errors.Wrap(err, "failed to register middlewares")
 	}
 
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "A random proverb that is very intellectual.")
+	router.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := fmt.Fprintln(w, "A random proverb that is very intellectual."); err != nil {
+			log.Debugf("failed to write root response: %v", err)
+		}
 	})
 
-	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`)) // nolint: gosec, errcheck
