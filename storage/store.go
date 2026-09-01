@@ -7,6 +7,6 @@ type DataStore interface {
 	SaveData(testID int, data []byte) error
 	LoadData(testID int) ([]byte, bool, error)
 	DeleteData(testID int) error
-	DeleteOlderThan(limit time.Time) error
+	DeleteOlderThanExcept(limit time.Time, keepIDs []int) error
 	Close() error
 }

@@ -270,7 +270,7 @@ func (panickingStore) LoadData(_ int) ([]byte, bool, error) {
 
 func (panickingStore) DeleteData(_ int) error { return nil }
 
-func (panickingStore) DeleteOlderThan(_ time.Time) error { return nil }
+func (panickingStore) DeleteOlderThanExcept(_ time.Time, _ []int) error { return nil }
 
 func (panickingStore) Close() error { return nil }
 

@@ -27,12 +27,14 @@ func SetDataStore(store storage.DataStore) {
 	DefaultService = NewService(store)
 }
 
-// DeleteDataOlderThan removes test data older than limit. It is called from
-// the background cleanup ticker, which can outlive a failed startup.
-func DeleteDataOlderThan(limit time.Time) error {
+// DeleteDataOlderThan removes test data older than limit, except for the runs
+// in keep. The janitor keeps the runs whose agents are still connected, so a
+// suite that is still running does not have its stored data deleted from
+// under it (STAB-4).
+func DeleteDataOlderThan(limit time.Time, keep []int) error {
 	if Store == nil {
 		return ErrNoDataStore
 	}
 
-	return Store.DeleteOlderThan(limit)
+	return Store.DeleteOlderThanExcept(limit, keep)
 }

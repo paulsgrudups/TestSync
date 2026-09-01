@@ -20,12 +20,6 @@ import (
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
-const (
-	cleanupInterval = 12 * time.Hour
-	cleanupAge      = 12 * time.Hour
-	maxBodyBytes    = 10 << 20
-)
-
 // Test describes a single test instance with it's saved data and connections.
 //
 // Connections are keyed by ConnID rather than held in a slice: an agent that
@@ -45,7 +39,9 @@ type Test struct {
 	mu          sync.RWMutex
 }
 
-// RegisterTestsRoutes registers all tests routes.
+// RegisterTestsRoutes registers all tests routes. It has no side effects: the
+// background sweep is owned by a [Janitor] the process starts and stops, not
+// by route registration (STAB-5).
 func RegisterTestsRoutes(r *mux.Router) {
 	subrouter := r.PathPrefix(`/tests/{testID:\d+}`).
 		Subrouter().StrictSlash(false)
@@ -53,8 +49,6 @@ func RegisterTestsRoutes(r *mux.Router) {
 	// The shared validator is resolved per request, so these routes cannot be
 	// registered before credentials are configured and end up open (SEC-1).
 	subrouter.Use(auth.SharedMiddleware())
-
-	startCleanupTicker()
 
 	subrouter.HandleFunc(`/`, createHandler).Methods(http.MethodPost)
 	subrouter.HandleFunc(``, createHandler).Methods(http.MethodPost)
@@ -82,6 +76,10 @@ func createHandler(w http.ResponseWriter, r *http.Request) {
 			utils.HTTPError(
 				w, "Provided test already has set data", http.StatusConflict,
 			)
+			return
+		}
+
+		if writeLimitError(w, logger, err) {
 			return
 		}
 
@@ -128,7 +126,12 @@ func readBodyData(w http.ResponseWriter, body io.ReadCloser) ([]byte, error) {
 
 	defer body.Close()
 
-	bodyContent, err := io.ReadAll(http.MaxBytesReader(w, body, maxBodyBytes))
+	// The body cap is the same limits.max_data_bytes that bounds a stored
+	// payload and a WebSocket frame, so a payload is accepted or refused the
+	// same way whichever path it arrives on.
+	bodyContent, err := io.ReadAll(
+		http.MaxBytesReader(w, body, CurrentLimits().MaxDataBytes),
+	)
 	if err != nil {
 		log.Debugf("Could not read body: %s", err.Error())
 		utils.HTTPError(
@@ -166,30 +169,33 @@ func GetPathID(
 	return id, nil
 }
 
+// writeLimitError reports a resource limit to the client and returns whether
+// it did. A limit is an operational condition the caller can act on, so it
+// gets its own status rather than a generic 500 (STAB-3, SEC-8).
+func writeLimitError(w http.ResponseWriter, logger *log.Entry, err error) bool {
+	switch {
+	case stderrors.Is(err, ErrDataTooLarge):
+		logger.Warnf("Rejected oversized payload: %s", err.Error())
+		utils.HTTPError(
+			w, "Request data too large", http.StatusRequestEntityTooLarge,
+		)
+
+		return true
+	case stderrors.Is(err, ErrTestLimitReached):
+		logger.Warnf("Rejected new test run: %s", err.Error())
+		utils.HTTPError(
+			w,
+			"Too many active test runs; retry once running suites finish",
+			http.StatusServiceUnavailable,
+		)
+
+		return true
+	default:
+		return false
+	}
+}
+
 func writeResponse(w http.ResponseWriter, resp []byte, code int) {
 	w.WriteHeader(code)
 	w.Write(resp) //nolint: gosec, errcheck
-}
-
-func startCleanupTicker() {
-	ticker := time.NewTicker(cleanupInterval)
-
-	go func() {
-		defer utils.RecoverGoroutine("test cleanup")
-
-		for range ticker.C {
-			deleteLimit := time.Now().Add(-cleanupAge)
-
-			RangeTests(func(testID int, t *Test) {
-				if t.Created.Before(deleteLimit) {
-					log.WithField("test_id", testID).Info("Deleting expired test")
-					DeleteTest(testID)
-				}
-			})
-
-			if err := DeleteDataOlderThan(deleteLimit); err != nil {
-				log.Errorf("Failed to delete old data: %s", err.Error())
-			}
-		}
-	}()
 }

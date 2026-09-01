@@ -56,6 +56,17 @@ type Client struct {
 	conn *websocket.Conn
 	out  chan outbound
 	done chan struct{}
+	// finished is closed by WritePump on its way out, once any close frame has
+	// been written and the socket released. Shutdown waits on it so that a
+	// close frame is not lost to the process exiting first.
+	finished chan struct{}
+
+	// closeCode and closeReason are the close frame WritePump sends as it
+	// exits. They are written inside closeOnce and read only after done is
+	// closed, so closing the channel is the happens-before edge that makes
+	// them safe to read without a lock.
+	closeCode   int
+	closeReason string
 
 	closeOnce sync.Once
 }
@@ -64,9 +75,10 @@ type Client struct {
 // in its own goroutine, before any message is sent.
 func NewClient(conn *websocket.Conn) *Client {
 	return &Client{
-		conn: conn,
-		out:  make(chan outbound, outboundBuffer),
-		done: make(chan struct{}),
+		conn:     conn,
+		out:      make(chan outbound, outboundBuffer),
+		done:     make(chan struct{}),
+		finished: make(chan struct{}),
 	}
 }
 
@@ -95,14 +107,49 @@ func (c *Client) Send(messageType int, data []byte) error {
 	}
 }
 
-// Close releases the connection. It is safe to call repeatedly and from any
-// goroutine; the connection itself is closed by WritePump on its way out.
+// Close releases the connection without sending a close frame. It is safe to
+// call repeatedly and from any goroutine; the connection itself is closed by
+// WritePump on its way out.
 func (c *Client) Close() {
 	if c == nil {
 		return
 	}
 
 	c.closeOnce.Do(func() { close(c.done) })
+}
+
+// CloseWithReason releases the connection after telling the peer why, using a
+// WebSocket close code such as [websocket.CloseServiceRestart] (1012) for a
+// restart or [websocket.CloseTryAgainLater] (1013) for a limit that the agent
+// may retry against. An agent that is told why can distinguish a deploy or a
+// rejection from a crash, which a dropped socket looks like.
+//
+// Like Close it is safe to call repeatedly and from any goroutine; the first
+// call decides the code.
+func (c *Client) CloseWithReason(code int, reason string) {
+	if c == nil {
+		return
+	}
+
+	c.closeOnce.Do(func() {
+		c.closeCode = code
+		c.closeReason = reason
+
+		close(c.done)
+	})
+}
+
+// Finished returns a channel that is closed once the connection's writer has
+// stopped, which is after any close frame has been written.
+func (c *Client) Finished() <-chan struct{} {
+	if c == nil {
+		closed := make(chan struct{})
+		close(closed)
+
+		return closed
+	}
+
+	return c.finished
 }
 
 // WritePump serialises all writes to the connection, including keepalive
@@ -122,9 +169,13 @@ func (c *Client) WritePump() {
 	defer func() {
 		ping.Stop()
 		c.Close()
+		c.writeCloseFrame()
+
 		if err := c.conn.Close(); err != nil {
 			log.Debugf("failed to close underlying websocket connection: %v", err)
 		}
+
+		close(c.finished)
 	}()
 
 	for {
@@ -147,6 +198,25 @@ func (c *Client) WritePump() {
 		case <-c.done:
 			return
 		}
+	}
+}
+
+// writeCloseFrame tells the peer why the connection is going away. It runs on
+// the writer's way out, so it is still the only goroutine writing to the
+// connection. A client closed without a reason gets no frame, which is the
+// behaviour every existing caller of Close relies on.
+func (c *Client) writeCloseFrame() {
+	if c.closeCode == 0 {
+		return
+	}
+
+	err := c.conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(c.closeCode, c.closeReason),
+		time.Now().Add(writeWait),
+	)
+	if err != nil {
+		log.Debugf("Could not send WS close frame: %s", err.Error())
 	}
 }
 

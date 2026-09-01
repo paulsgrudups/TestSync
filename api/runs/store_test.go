@@ -5,16 +5,22 @@ import "testing"
 func TestEnsureTestAndGetTest(t *testing.T) {
 	AllTests = make(map[int]*Test)
 
-	created := EnsureTest(10, func() *Test {
+	created, err := EnsureTest(10, func() *Test {
 		return &Test{}
 	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if created == nil {
 		t.Fatal("expected created test, got nil")
 	}
 
-	second := EnsureTest(10, func() *Test {
+	second, err := EnsureTest(10, func() *Test {
 		return &Test{}
 	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if created != second {
 		t.Fatal("expected EnsureTest to return existing test")
 	}

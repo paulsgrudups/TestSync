@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -172,9 +173,29 @@ func (s *SQLiteStore) DeleteData(testID int) error {
 	return err
 }
 
-// DeleteOlderThan deletes rows older than the provided limit.
-func (s *SQLiteStore) DeleteOlderThan(limit time.Time) error {
-	_, err := s.db.Exec(`DELETE FROM test_data WHERE created_at < ?`, limit.UnixMilli())
+// DeleteOlderThanExcept deletes rows older than the provided limit, leaving
+// the rows named in keepIDs in place whatever their age. The caller uses that
+// to protect runs whose agents are still connected.
+//
+// keepIDs is bounded by the configured maximum number of runs, which is far
+// below sqlite's limit on bound parameters, and is empty on the common path.
+func (s *SQLiteStore) DeleteOlderThanExcept(limit time.Time, keepIDs []int) error {
+	args := make([]any, 0, len(keepIDs)+1)
+	args = append(args, limit.UnixMilli())
+
+	query := `DELETE FROM test_data WHERE created_at < ?`
+
+	if len(keepIDs) > 0 {
+		placeholders := strings.Repeat(",?", len(keepIDs))[1:]
+		query += ` AND test_id NOT IN (` + placeholders + `)`
+
+		for _, id := range keepIDs {
+			args = append(args, id)
+		}
+	}
+
+	_, err := s.db.Exec(query, args...)
+
 	return err
 }
 

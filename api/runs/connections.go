@@ -1,6 +1,8 @@
 package runs
 
 import (
+	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"sync/atomic"
@@ -23,11 +25,23 @@ var nextConnID atomic.Uint64
 // AddConnection registers a connection and returns the ID that identifies it
 // for the rest of its life. The caller owns that ID and must hand it to
 // RemoveConnection when the connection's reader exits.
-func (t *Test) AddConnection(conn *wsutil.Client) ConnID {
+//
+// A run that already holds limits.max_connections_per_test agents refuses the
+// connection with [ErrConnectionLimitReached] rather than growing without
+// bound (STAB-3). The check and the insert happen under the same lock, so
+// agents arriving together cannot race past the limit.
+func (t *Test) AddConnection(conn *wsutil.Client) (ConnID, error) {
 	id := ConnID(nextConnID.Add(1))
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	if limit := CurrentLimits().MaxConnectionsPerTest; limit > 0 && len(t.connections) >= limit {
+		return 0, fmt.Errorf(
+			"%w: %d agents are attached, which is the configured maximum",
+			ErrConnectionLimitReached, len(t.connections),
+		)
+	}
 
 	if t.connections == nil {
 		t.connections = make(map[ConnID]*wsutil.Client)
@@ -41,7 +55,7 @@ func (t *Test) AddConnection(conn *wsutil.Client) ConnID {
 	t.ordinals[id] = t.nextOrdinal
 	t.nextOrdinal++
 
-	return id
+	return id, nil
 }
 
 // RemoveConnection deregisters a connection and drops it from every checkpoint
@@ -102,4 +116,36 @@ func (t *Test) GetConnectionsSnapshot() []*wsutil.Client {
 	defer t.mu.RUnlock()
 
 	return slices.Collect(maps.Values(t.connections))
+}
+
+// CloseAllConnections closes every registered agent connection with the given
+// WebSocket close code and waits, until ctx expires, for the close frames to
+// reach the wire.
+//
+// Shutdown uses it with [websocket.CloseServiceRestart] so that an agent can
+// tell a deploy from a crash: http.Server.Shutdown does not track hijacked
+// connections, so without this the sockets are simply dropped and every agent
+// sees an abnormal closure (STAB-6).
+//
+// It returns how many connections were closed.
+func CloseAllConnections(ctx context.Context, code int, reason string) int {
+	clients := make([]*wsutil.Client, 0)
+
+	RangeTests(func(_ int, t *Test) {
+		clients = append(clients, t.GetConnectionsSnapshot()...)
+	})
+
+	for _, client := range clients {
+		client.CloseWithReason(code, reason)
+	}
+
+	for _, client := range clients {
+		select {
+		case <-client.Finished():
+		case <-ctx.Done():
+			return len(clients)
+		}
+	}
+
+	return len(clients)
 }

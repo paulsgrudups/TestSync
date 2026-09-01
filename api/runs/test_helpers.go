@@ -1,6 +1,9 @@
 package runs
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // GetData returns test data safely.
 func (t *Test) GetData() []byte {
@@ -29,10 +32,23 @@ func (t *Test) SetData(data []byte) {
 // The round's size and deadline are taken from the first agent to arrive in
 // it, and a finished round is immediately replaced by an empty one, so the
 // same identifier can be reused for every iteration of a looping suite.
+//
+// It returns [ErrCheckpointLimitReached] when a new identifier would take the
+// run past limits.max_checkpoints_per_test. A timeout that is not positive is
+// treated as [DefaultCheckpointTimeout]: an unbounded round is not on offer,
+// and a zero deadline would otherwise fire at once and time the round out
+// before the second agent could arrive.
 func (t *Test) JoinCheckpoint(
 	identifier string, target int, timeout time.Duration, connID ConnID,
-) {
-	cp := t.ensureCheckpoint(identifier)
+) error {
+	if timeout <= 0 {
+		timeout = DefaultCheckpointTimeout
+	}
+
+	cp, err := t.ensureCheckpoint(identifier)
+	if err != nil {
+		return err
+	}
 
 	// t.mu is released before cp.mu is taken, and cp.mu before the broadcast
 	// takes t.mu again to resolve the members: the two locks are never held at
@@ -40,15 +56,25 @@ func (t *Test) JoinCheckpoint(
 	if released := cp.join(connID, target, timeout); released != nil {
 		cp.broadcastStatus(released)
 	}
+
+	return nil
 }
 
-// ensureCheckpoint gets or creates a checkpoint.
-func (t *Test) ensureCheckpoint(identifier string) *checkpoint {
+// ensureCheckpoint gets or creates a checkpoint, refusing to create one past
+// the run's checkpoint limit.
+func (t *Test) ensureCheckpoint(identifier string) (*checkpoint, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if cp, ok := t.checkPoints[identifier]; ok {
-		return cp
+		return cp, nil
+	}
+
+	if limit := CurrentLimits().MaxCheckpointsPerTest; limit > 0 && len(t.checkPoints) >= limit {
+		return nil, fmt.Errorf(
+			"%w: %d checkpoints exist on this run, which is the configured maximum",
+			ErrCheckpointLimitReached, len(t.checkPoints),
+		)
 	}
 
 	if t.checkPoints == nil {
@@ -58,5 +84,5 @@ func (t *Test) ensureCheckpoint(identifier string) *checkpoint {
 	cp := newCheckpoint(t, identifier)
 	t.checkPoints[identifier] = cp
 
-	return cp
+	return cp, nil
 }

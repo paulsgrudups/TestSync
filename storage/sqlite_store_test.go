@@ -52,7 +52,7 @@ func TestSQLiteStore_DeleteOlderThan(t *testing.T) {
 		t.Fatalf("save failed: %v", err)
 	}
 
-	if err := store.DeleteOlderThan(time.Now().Add(1 * time.Hour)); err != nil {
+	if err := store.DeleteOlderThanExcept(time.Now().Add(1*time.Hour), nil); err != nil {
 		t.Fatalf("delete older than failed: %v", err)
 	}
 

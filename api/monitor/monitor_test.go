@@ -157,11 +157,11 @@ func TestListRunsShape(t *testing.T) {
 	handler := newTestRouter(t)
 
 	waiting, waitingIDs := newRun(t, 4242, 3)
-	waiting.JoinCheckpoint("login-barrier", 3, runs.DefaultCheckpointTimeout, waitingIDs[0])
+	joinCheckpoint(t, waiting, "login-barrier", 3, runs.DefaultCheckpointTimeout, waitingIDs[0])
 	waiting.JoinCheckpoint("login-barrier", 3, runs.DefaultCheckpointTimeout, waitingIDs[1])
 
 	released, releasedIDs := newRun(t, 17, 1)
-	released.JoinCheckpoint("warmup", 1, runs.DefaultCheckpointTimeout, releasedIDs[0])
+	joinCheckpoint(t, released, "warmup", 1, runs.DefaultCheckpointTimeout, releasedIDs[0])
 
 	rec := get(t, handler, "/api/v1/runs")
 
@@ -206,9 +206,9 @@ func TestRunDetailShape(t *testing.T) {
 
 	run, ids := newRun(t, 900, 3)
 	run.SetData([]byte("secret-payload"))
-	run.JoinCheckpoint("stage-2", 3, runs.DefaultCheckpointTimeout, ids[0])
+	joinCheckpoint(t, run, "stage-2", 3, runs.DefaultCheckpointTimeout, ids[0])
 	run.JoinCheckpoint("stage-2", 3, runs.DefaultCheckpointTimeout, ids[2])
-	run.JoinCheckpoint("stage-1", 1, runs.DefaultCheckpointTimeout, ids[0])
+	joinCheckpoint(t, run, "stage-1", 1, runs.DefaultCheckpointTimeout, ids[0])
 	run.GetConnection(ids[1]).Close()
 
 	rec := get(t, handler, "/api/v1/runs/900")
@@ -364,18 +364,38 @@ type runSummaryDTO struct {
 	ForceEnd              bool      `json:"force_end"`
 }
 
+// joinCheckpoint joins a barrier and fails the test if the run refused.
+func joinCheckpoint(
+	t *testing.T, run *runs.Test, identifier string, target int,
+	timeout time.Duration, connID runs.ConnID,
+) {
+	t.Helper()
+
+	if err := run.JoinCheckpoint(identifier, target, timeout, connID); err != nil {
+		t.Fatalf("failed to join checkpoint %q: %v", identifier, err)
+	}
+}
+
 // newRun registers a run with the requested number of attached connections.
 // The connections are never written to, so they need no live socket.
 func newRun(t *testing.T, testID, connections int) (*runs.Test, []runs.ConnID) {
 	t.Helper()
 
-	run := runs.EnsureTest(testID, func() *runs.Test {
+	run, err := runs.EnsureTest(testID, func() *runs.Test {
 		return &runs.Test{Created: time.Now().UTC()}
 	})
+	if err != nil {
+		t.Fatalf("failed to register run: %v", err)
+	}
 
 	ids := make([]runs.ConnID, 0, connections)
 	for range connections {
-		ids = append(ids, run.AddConnection(wsutil.NewClient(nil)))
+		id, err := run.AddConnection(wsutil.NewClient(nil))
+		if err != nil {
+			t.Fatalf("failed to attach connection: %v", err)
+		}
+
+		ids = append(ids, id)
 	}
 
 	return run, ids

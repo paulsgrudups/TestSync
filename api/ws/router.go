@@ -17,10 +17,26 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// maxMessageBytes bounds a single inbound WebSocket frame, mirroring the 10 MiB
-// cap the HTTP path applies to request bodies. An oversized frame is rejected
-// from its header, before its payload is read or allocated.
-const maxMessageBytes = 10 << 20
+// envelopeAllowance is the room a frame gets on top of limits.max_data_bytes
+// for its command envelope. Without it a payload one byte over the limit would
+// be killed by the frame cap with close code 1009 instead of being answered
+// with the "error" reply that names the limit; with it, only a frame that is
+// wildly oversized is rejected from its header.
+const envelopeAllowance = 1 << 10
+
+// rejectFlushWait bounds how long a rejected registration waits for its close
+// frame to reach the wire. The reader closes the socket on its way out, so
+// without this the frame the agent needs in order to tell a rejection from a
+// crash could be lost to the race.
+const rejectFlushWait = 2 * time.Second
+
+// maxMessageBytes bounds a single inbound WebSocket frame. It follows the same
+// limits.max_data_bytes that bounds an HTTP request body and a stored payload,
+// so the three caps cannot drift apart. An oversized frame is rejected from
+// its header, before its payload is read or allocated.
+func maxMessageBytes() int64 {
+	return runs.CurrentLimits().MaxDataBytes + envelopeAllowance
+}
 
 var (
 	// upgrader is shared by every request, so it must never be mutated after
@@ -80,6 +96,20 @@ func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A server that is already holding its maximum number of runs says so with
+	// an HTTP status, before the socket is upgraded and an error can only be
+	// delivered as a close frame (STAB-3).
+	if err := runs.CanAdmitTest(testID); err != nil {
+		log.Warnf("Rejecting WebSocket registration: %s", err.Error())
+		utils.HTTPError(
+			w,
+			"Too many active test runs; retry once running suites finish",
+			http.StatusServiceUnavailable,
+		)
+
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Errorf("Failed to upgrade connection: %s", err.Error())
@@ -119,7 +149,7 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 	// read limit rejects an oversized frame from its header (STAB-2). The
 	// ReadTimeout on the WS http.Server does not apply to an upgraded
 	// connection and provides none of this.
-	conn.SetReadLimit(maxMessageBytes)
+	conn.SetReadLimit(maxMessageBytes())
 
 	if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 		log.Errorf("Failed to set read deadline: %s", err.Error())
@@ -130,15 +160,31 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	r := runs.EnsureTest(testID, func() *runs.Test {
+	r, err := runs.EnsureTest(testID, func() *runs.Test {
 		return &runs.Test{Created: time.Now()}
 	})
+	if err != nil {
+		// The socket is already upgraded, so the rejection is a close frame
+		// rather than an HTTP status. 1013 (try again later) says the agent
+		// may retry, which is true of both limits below.
+		log.Warnf("Rejecting connection for test %d: %s", testID, err.Error())
+		rejectConnection(client, "too many active test runs")
+
+		return
+	}
 
 	// The connection is registered under an ID owned by this reader alone.
 	// However the goroutine exits, panics included, the connection stops being
 	// counted and gives up its slot in every barrier it joined, instead of
 	// holding the other agents there (CONC-5, CONC-6).
-	connID := r.AddConnection(client)
+	connID, err := r.AddConnection(client)
+	if err != nil {
+		log.Warnf("Rejecting connection for test %d: %s", testID, err.Error())
+		rejectConnection(client, "connection limit reached for this test run")
+
+		return
+	}
+
 	defer r.RemoveConnection(connID)
 
 	for {
@@ -170,6 +216,20 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 		if err != nil {
 			log.Errorf("Failed to process message: %s", err.Error())
 		}
+	}
+}
+
+// rejectConnection turns an agent away with close code 1013 (try again later)
+// and waits, briefly, for the frame to be written.
+func rejectConnection(client *wsutil.Client, reason string) {
+	client.CloseWithReason(websocket.CloseTryAgainLater, reason)
+
+	timer := time.NewTimer(rejectFlushWait)
+	defer timer.Stop()
+
+	select {
+	case <-client.Finished():
+	case <-timer.C:
 	}
 }
 
