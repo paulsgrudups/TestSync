@@ -16,8 +16,12 @@ Lightweight test agent synchronization over HTTP and WebSocket. Store test data,
 
 ## Quickstart
 1) Install Go
-2) Create configuration
-3) Run the server
+2) Create a config directory containing a file named `configuration.json`
+3) Run the server, pointing `-c` at that directory
+
+The `-c` flag takes the **directory**, not the file: `-c ./config` reads
+`./config/configuration.json`. Credentials are mandatory — see
+[Authentication](#authentication).
 
 Example config:
 ```
@@ -37,12 +41,54 @@ Example config:
   "storage": {
     "type": "sqlite",
     "sqlite_path": "./testsync.db"
+  },
+  "cleanup": {
+    "interval": "1h",
+    "retention": "12h"
+  },
+  "limits": {
+    "max_tests": 10000,
+    "max_connections_per_test": 256,
+    "max_checkpoints_per_test": 256,
+    "max_data_bytes": 10485760
   }
 }
 ```
 
+Every key except `sync_client` may be omitted; the defaults above are what the
+server uses. `cleanup` and `limits` are documented under
+[Retention](#retention) and [Limits](#limits).
+
 Run:
 - go run main.go -c ./config
+
+### Startup failures
+A configuration the server cannot run with is reported as one line on stderr,
+and the process exits with status 1. Earlier versions panicked with a runtime
+stack trace for each of these:
+
+```
+testsync: no configuration file at ./config/configuration.json: create it, or point -c at the directory holding it
+testsync: could not read ./config/configuration.json: unexpected end of JSON input
+testsync: invalid logging.level "VERBOSE": use DEBUG, INFO, WARN or ERROR
+testsync: invalid configuration in ./config/configuration.json: http_port is 70000; it must be between 1 and 65535
+testsync: http server on port 9104: listen tcp :9104: bind: address already in use
+testsync: websocket server on port 9105: listen tcp :9105: bind: address already in use
+```
+
+A WebSocket port that was already in use used to be ignored entirely: the
+process kept running with no WebSocket server and said nothing about it.
+
+### Shutdown
+On `SIGINT`/`SIGTERM` the server stops accepting, lets requests that are
+already in flight finish, tells every connected agent that it is going away
+with WebSocket close code **1012 (Service Restart)**, stops the janitor, and
+closes the database last. The whole sequence is bounded at 15 seconds.
+
+An agent can therefore tell a deploy from a crash: 1012 means "reconnect",
+while a dropped socket (1006) does not. Earlier versions closed the database
+first, so requests in flight during a restart failed with
+`sql: database is closed`, and agents were never told anything.
 
 ## Authentication
 Credentials are **mandatory**. Both the HTTP and the WebSocket server
@@ -50,7 +96,7 @@ authenticate through the same validator, and a server that has no credentials
 refuses to start:
 
 ```
-Refusing to start: sync_client credentials are empty
+testsync: refusing to start: sync_client credentials are empty
 ```
 
 - `auth.mode` selects the mode. `basic` is the default and requires a non-empty
@@ -154,7 +200,8 @@ Message format:
 
 Commands:
 - read_data: reply with raw stored data
-- update_data: replace stored data with provided content
+- update_data: replace stored data with provided content. A payload over
+  `limits.max_data_bytes` is refused; see [Limits](#limits)
 - get_connection_count: reply with {"count": <int>}, counting only connections
   that are still alive. A disconnected agent stops being counted within one
   command round-trip.
@@ -221,6 +268,67 @@ and fewer connections remain than the round's `target_count`, everyone still
 waiting is released with `participant_lost` rather than waiting for an agent
 that is never coming back. An agent that disconnects before the others join is
 not detectable that way, so the round's timeout is the backstop.
+
+## Retention
+Test runs are held in memory for as long as they are useful and are then
+reclaimed, together with their stored data, by a background janitor.
+
+- `cleanup.retention` is how long a run with **no connected agents** is kept.
+  Defaults to `12h`.
+- `cleanup.interval` is how often the janitor sweeps. Defaults to `1h`. It also
+  sweeps once at startup, so data left behind by a previous process is
+  reclaimed immediately rather than one interval later.
+- Both are duration strings: `"90s"`, `"30m"`, `"12h"`. An unparseable value is
+  a startup error.
+
+A run whose agents are still connected is **never** swept, however old it is,
+and neither is its stored data. Earlier versions deleted a run purely by age:
+a suite still running after the window had its state deleted from underneath
+it, and the agents that arrived afterwards ended up on a second, empty run
+with a different connection count and barriers the first half could not join.
+
+The sweep also no longer starts as a side effect of registering the HTTP
+routes, so an in-process test harness can build the router as often as it likes
+without leaking a background worker per call.
+
+## Limits
+Nothing used to bound the number of runs, the agents on one run, the barriers
+on one run, or the size of a payload, so any authorized client could exhaust
+the server's memory. Each limit below is configurable and has a documented
+rejection: **exceeding one is always reported, never silently dropped**.
+
+| Setting | Default | Bounds | Rejection |
+|---|---|---|---|
+| `limits.max_tests` | 10000 | Test runs registered at once | HTTP `503` with `{"code":503,"error":"Too many active test runs; retry once running suites finish"}`. A WebSocket registration for a **new** test ID is refused the same way before the connection is upgraded; if the limit is reached during the upgrade, the connection is closed with **1013 (Try Again Later)** |
+| `limits.max_connections_per_test` | 256 | Agents attached to one run | The WebSocket connection is closed with **1013 (Try Again Later)** and reason `connection limit reached for this test run`. Connections already accepted are unaffected, and a slot freed by a departing agent is reusable |
+| `limits.max_checkpoints_per_test` | 256 | Distinct checkpoint identifiers on one run | `wait_checkpoint` is answered with an `error` message carrying code `checkpoint_limit_reached`. The connection stays usable, and identifiers that already exist keep working. Barriers are reusable, so a looping suite needs one identifier per barrier, not one per iteration |
+| `limits.max_data_bytes` | 10485760 (10 MiB) | A stored payload, an HTTP request body and a single WebSocket frame | `POST /tests/{id}` answers `413` with `{"code":413,"error":"Request data too large"}` and stores nothing. `update_data` is answered with an `error` message carrying code `payload_too_large`. A frame that is wildly oversized (more than the limit plus a 1 KiB envelope allowance) is still rejected from its header with close code **1009** |
+
+The three payload caps are deliberately one number: a payload that is accepted
+on one path is accepted on all of them.
+
+A limit that is omitted or set to `0` uses the default. A negative value is a
+startup error. There is no "unlimited" setting; an unbounded server is what
+these exist to prevent.
+
+### The `error` reply
+A refused command is answered on the same connection, in the standard
+envelope:
+
+```
+{
+  "command": "error",
+  "content": {
+    "code": "payload_too_large" | "checkpoint_limit_reached" |
+            "test_limit_reached" | "connection_limit_reached",
+    "error": "<human-readable reason>"
+  }
+}
+```
+
+`error` is a new reply, not a new request: a client that ignores unknown
+commands keeps working exactly as before. `code` is stable and safe to branch
+on; `error` is for logs and for whoever reads the failed run.
 
 ## Storage
 Test data is persisted in a local SQLite database. There is no in-memory

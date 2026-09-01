@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/paulsgrudups/TestSync/security/advisories/new
+    about: Please report vulnerabilities privately through a GitHub security advisory, never as a public issue.
+  - name: Contributing guide
+    url: https://github.com/paulsgrudups/TestSync/blob/master/CONTRIBUTING.md
+    about: How to build, configure, test and verify a change before opening a pull request.

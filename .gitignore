@@ -18,3 +18,9 @@
 config
 node_modules
 docs
+
+# Local sqlite databases (default storage.sqlite_path is ./testsync.db)
+*.db
+*.db-wal
+*.db-shm
+*.db.corrupt-*

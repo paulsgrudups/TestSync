@@ -1,0 +1,98 @@
+name: Feature request
+description: Suggest a capability or change to TestSync.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        TestSync is pre-1.0 and deliberately small: it stores per-test data and
+        synchronizes agents at checkpoint barriers. Proposals that keep it a
+        focused synchronization server are the easiest to accept.
+
+        Please describe the testing problem you are stuck on, not only the
+        feature you have in mind — there may be a cheaper way to solve it.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: I read README.md and this is not already supported.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do with your test suite, and where does TestSync get in the way today?
+      placeholder: |
+        Our suite runs 12 parallel agents across two machines. When one agent
+        crashes mid-run we cannot tell from the outside which checkpoint the
+        others are stuck on until the timeout fires.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like TestSync to do
+      description: Be concrete. If it involves the API, sketch the request and the response.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including what you do today to work around it.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part would this touch?
+      options:
+        - Checkpoint barriers
+        - WebSocket protocol or commands
+        - HTTP test-data API
+        - Monitoring API or /ui
+        - Storage and persistence
+        - Configuration and startup
+        - Authentication and security
+        - Client examples under usage/
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: compatibility
+    attributes:
+      label: Does this change the WebSocket wire protocol?
+      description: >
+        Existing fields do not change name, type or meaning; new information
+        goes into new optional fields. A proposal that needs an existing field
+        to change has to explain how existing agents migrate.
+      options:
+        - No protocol change
+        - Yes, but only new optional fields or a new command
+        - Yes, it changes the meaning of an existing field
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: scale
+    attributes:
+      label: How many agents and runs does your setup involve?
+      description: Scale changes which designs are reasonable, especially for anything touching barriers.
+      placeholder: "12 agents per run, up to 4 runs in parallel"
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to open a pull request for this.

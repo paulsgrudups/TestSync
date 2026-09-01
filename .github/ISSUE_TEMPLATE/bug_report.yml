@@ -1,0 +1,217 @@
+name: Bug report
+description: Something in TestSync behaves incorrectly — a barrier that released wrong, a dropped connection, a bad response.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug.
+
+        **Do not report a security vulnerability here.** Use a
+        [private security advisory](https://github.com/paulsgrudups/TestSync/security/advisories/new)
+        instead — see [SECURITY.md](https://github.com/paulsgrudups/TestSync/blob/master/SECURITY.md).
+
+        Barrier bugs are nearly impossible to diagnose without the number of
+        agents involved and the checkpoint details, so please fill those in
+        even if they feel obvious.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: I reproduced this on the latest commit of the default branch (or I explain below why I could not).
+          required: true
+        - label: This is not a security vulnerability report.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What the server or the agents actually did.
+      placeholder: |
+        Three agents joined checkpoint "login-done" with target_count 3. Two were
+        released with reason "complete" and the third hung until its own timeout.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >
+        The exact sequence, including the config used to start the server and
+        the commands or messages each agent sent. A minimal script or a failing
+        Go test is the fastest thing to act on.
+      placeholder: |
+        1. go run main.go -c ./config
+        2. Start 3 agents that connect to ws://localhost:9105/register/42
+        3. Each sends wait_checkpoint {"identifier":"login-done","target_count":3}
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Run shape
+
+        These fields describe the run the bug happened in.
+
+  - type: input
+    id: agent-count
+    attributes:
+      label: How many agents were involved
+      description: >
+        How many WebSocket connections were registered to the affected test run
+        at the time. Write "1" if it was a single agent, or "n/a" if the bug has
+        nothing to do with a run.
+      placeholder: "3"
+    validations:
+      required: true
+
+  - type: input
+    id: checkpoint-identifier
+    attributes:
+      label: Checkpoint identifier
+      description: The `identifier` sent in `wait_checkpoint`. Required for any barrier bug.
+      placeholder: "login-done"
+
+  - type: input
+    id: target-count
+    attributes:
+      label: Checkpoint target_count (and timeout_ms, if set)
+      description: The values the first agent of the round sent — they fix the round for everyone else.
+      placeholder: "target_count: 3, timeout_ms: 30000"
+
+  - type: textarea
+    id: checkpoint-reply
+    attributes:
+      label: Checkpoint reply the agents received
+      description: >
+        The `wait_checkpoint` reply content, if there was one. `reason`,
+        `generation`, `joined` and `target` are usually where the answer is.
+      render: json
+      placeholder: |
+        {"identifier":"login-done","finished":false,"start_at":1756000000000,
+         "reason":"timeout","generation":2,"joined":2,"target":3}
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Does it reproduce consistently?
+      options:
+        - Every time
+        - Intermittently (often)
+        - Intermittently (rarely, seen a handful of times)
+        - Seen exactly once
+        - Have not tried to reproduce
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Environment
+
+  - type: input
+    id: version
+    attributes:
+      label: TestSync version or commit
+      description: The commit SHA you ran (`git rev-parse --short HEAD`), or the release tag.
+      placeholder: "72464c4"
+    validations:
+      required: true
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: Output of `go version`.
+      placeholder: "go version go1.25.5 linux/amd64"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and architecture
+      placeholder: "Ubuntu 24.04 on WSL2, amd64"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Storage
+      description: Only SQLite is supported; whether the database was reused matters for reproducibility.
+      options:
+        - SQLite, a fresh database created by this run
+        - SQLite, a database reused from earlier runs
+        - SQLite, not sure whether it was fresh
+        - Other or not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: auth-mode
+    attributes:
+      label: Authentication mode
+      options:
+        - 'basic (credentials configured — the default)'
+        - 'none (auth.mode "none" or --insecure-no-auth)'
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part does this affect?
+      options:
+        - Checkpoint barriers
+        - WebSocket connection lifecycle
+        - HTTP test-data API
+        - Monitoring API or /ui
+        - Storage and persistence
+        - Configuration and startup
+        - Authentication
+        - Examples under usage/
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server logs
+      description: >
+        Please include this — it is usually the difference between a fixable
+        report and a guess. Server output covering the failure, with
+        `logging.level` set to `DEBUG` if you can reproduce it again. Remove
+        credentials before pasting.
+      render: text
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Your `configuration.json` with `sync_client` credentials removed.
+      render: json
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Client library and version, proxies in front of the server, anything unusual about the setup.
