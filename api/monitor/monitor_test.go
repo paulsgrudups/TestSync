@@ -157,11 +157,11 @@ func TestListRunsShape(t *testing.T) {
 	handler := newTestRouter(t)
 
 	waiting, waitingIDs := newRun(t, 4242, 3)
-	joinCheckpoint(t, waiting, "login-barrier", 3, runs.DefaultCheckpointTimeout, waitingIDs[0])
-	waiting.JoinCheckpoint("login-barrier", 3, runs.DefaultCheckpointTimeout, waitingIDs[1])
+	joinCheckpoint(t, waiting, "login-barrier", 3, waitingIDs[0])
+	joinCheckpoint(t, waiting, "login-barrier", 3, waitingIDs[1])
 
 	released, releasedIDs := newRun(t, 17, 1)
-	joinCheckpoint(t, released, "warmup", 1, runs.DefaultCheckpointTimeout, releasedIDs[0])
+	joinCheckpoint(t, released, "warmup", 1, releasedIDs[0])
 
 	rec := get(t, handler, "/api/v1/runs")
 
@@ -206,9 +206,9 @@ func TestRunDetailShape(t *testing.T) {
 
 	run, ids := newRun(t, 900, 3)
 	run.SetData([]byte("secret-payload"))
-	joinCheckpoint(t, run, "stage-2", 3, runs.DefaultCheckpointTimeout, ids[0])
-	run.JoinCheckpoint("stage-2", 3, runs.DefaultCheckpointTimeout, ids[2])
-	joinCheckpoint(t, run, "stage-1", 1, runs.DefaultCheckpointTimeout, ids[0])
+	joinCheckpoint(t, run, "stage-2", 3, ids[0])
+	joinCheckpoint(t, run, "stage-2", 3, ids[2])
+	joinCheckpoint(t, run, "stage-1", 1, ids[0])
 	run.GetConnection(ids[1]).Close()
 
 	rec := get(t, handler, "/api/v1/runs/900")
@@ -366,12 +366,13 @@ type runSummaryDTO struct {
 
 // joinCheckpoint joins a barrier and fails the test if the run refused.
 func joinCheckpoint(
-	t *testing.T, run *runs.Test, identifier string, target int,
-	timeout time.Duration, connID runs.ConnID,
+	t *testing.T, run *runs.Test, identifier string, target int, connID runs.ConnID,
 ) {
 	t.Helper()
 
-	if err := run.JoinCheckpoint(identifier, target, timeout, connID); err != nil {
+	if err := run.JoinCheckpoint(
+		identifier, target, runs.DefaultCheckpointTimeout, connID,
+	); err != nil {
 		t.Fatalf("failed to join checkpoint %q: %v", identifier, err)
 	}
 }

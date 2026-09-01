@@ -181,7 +181,7 @@ func TestUpdateDataRejectsOversizedPayload(t *testing.T) {
 
 // TestShutdownClosesAgentsWithServiceRestart covers STAB-6 on the wire: on
 // shutdown an agent is told the server is going away with close code 1012, so
-// a deploy is distinguishable from a crash. http.Server.Shutdown does not
+// a deploy is distinguishable from a crash. [http.Server.Shutdown] does not
 // track hijacked connections, so nothing used to reach the agents at all.
 func TestShutdownClosesAgentsWithServiceRestart(t *testing.T) {
 	const testID = 43

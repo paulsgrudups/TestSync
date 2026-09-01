@@ -1,4 +1,3 @@
-// Package ws contains WebSocket server tests.
 package ws
 
 import (
@@ -36,15 +35,15 @@ func TestWebSocketCommands(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	updatePayload := map[string]string{"data": "value"}
-	if err := writeWS(conn, CommandUpdateData, updatePayload); err != nil {
+	if err = writeWS(conn, CommandUpdateData, updatePayload); err != nil {
 		t.Fatalf("update_data failed: %v", err)
 	}
 
-	if err := writeWS(conn, CommandReadData, map[string]string{}); err != nil {
+	if err = writeWS(conn, CommandReadData, map[string]string{}); err != nil {
 		t.Fatalf("read_data failed: %v", err)
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err = conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("failed to set read deadline: %v", err)
 	}
 	_, msg, err := conn.ReadMessage()
@@ -60,11 +59,11 @@ func TestWebSocketCommands(t *testing.T) {
 		t.Fatalf("unexpected read_data payload: %q", string(msg))
 	}
 
-	if err := writeWS(conn, CommandGetConnectionCount, map[string]string{}); err != nil {
+	if err = writeWS(conn, CommandGetConnectionCount, map[string]string{}); err != nil {
 		t.Fatalf("get_connection_count failed: %v", err)
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err = conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("failed to set read deadline: %v", err)
 	}
 	_, msg, err = conn.ReadMessage()
@@ -73,7 +72,7 @@ func TestWebSocketCommands(t *testing.T) {
 	}
 
 	var countMsg wsutil.Message
-	if err := json.Unmarshal(msg, &countMsg); err != nil {
+	if err = json.Unmarshal(msg, &countMsg); err != nil {
 		t.Fatalf("failed to unmarshal count msg: %v", err)
 	}
 	if countMsg.Command != CommandGetConnectionCount {
@@ -83,21 +82,21 @@ func TestWebSocketCommands(t *testing.T) {
 	var countPayload struct {
 		Count int `json:"count"`
 	}
-	if err := json.Unmarshal(countMsg.Content.Bytes, &countPayload); err != nil {
+	if err = json.Unmarshal(countMsg.Content.Bytes, &countPayload); err != nil {
 		t.Fatalf("failed to parse count payload: %v", err)
 	}
 	if countPayload.Count < 1 {
 		t.Fatalf("expected count >= 1, got %d", countPayload.Count)
 	}
 
-	if err := writeWS(conn, CommandWaitCheckpoint, map[string]any{
+	if err = writeWS(conn, CommandWaitCheckpoint, map[string]any{
 		"identifier":   "checkpoint-1",
 		"target_count": 1,
 	}); err != nil {
 		t.Fatalf("wait_checkpoint failed: %v", err)
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err = conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("failed to set read deadline: %v", err)
 	}
 	_, msg, err = conn.ReadMessage()

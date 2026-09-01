@@ -1,4 +1,3 @@
-// Package ws contains WebSocket server tests.
 package ws
 
 import (
@@ -372,11 +371,7 @@ func TestConcurrentRegistrationsDoNotRaceOnUpgrader(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range connections {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			<-start
 
 			conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
@@ -391,7 +386,7 @@ func TestConcurrentRegistrationsDoNotRaceOnUpgrader(t *testing.T) {
 			if err := conn.Close(); err != nil {
 				t.Errorf("failed to close connection: %v", err)
 			}
-		}()
+		})
 	}
 
 	close(start)

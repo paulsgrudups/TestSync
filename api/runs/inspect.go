@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -122,9 +123,7 @@ func (t *Test) State(testID int) TestState {
 	// Resolving a member ordinal needs the run's map, so it is copied out here
 	// rather than reaching back into the run while a checkpoint lock is held.
 	ordinals := make(map[ConnID]int, len(t.ordinals))
-	for id, ordinal := range t.ordinals {
-		ordinals[id] = ordinal
-	}
+	maps.Copy(ordinals, t.ordinals)
 
 	points := make([]*checkpoint, 0, len(t.checkPoints))
 	for _, cp := range t.checkPoints {

@@ -120,7 +120,7 @@ func TestMaxCheckpointsPerTestRejectsNewIdentifiers(t *testing.T) {
 	}
 
 	for _, identifier := range []string{"round-1", "round-2"} {
-		if err := run.JoinCheckpoint(identifier, 5, time.Minute, connID); err != nil {
+		if err = run.JoinCheckpoint(identifier, 5, time.Minute, connID); err != nil {
 			t.Fatalf("checkpoint %q was refused below the limit: %v", identifier, err)
 		}
 	}

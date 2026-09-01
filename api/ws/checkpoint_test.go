@@ -1,4 +1,3 @@
-// Package ws contains WebSocket server tests.
 package ws
 
 import (
@@ -202,12 +201,15 @@ func (a *agent) awaitRelease(timeout time.Duration) (checkpointRelease, bool) {
 	return release, true
 }
 
+// connectionCountTimeout bounds how long waitForConnectionCount polls.
+const connectionCountTimeout = 5 * time.Second
+
 // waitForConnectionCount polls until the server reports the wanted number of
 // connections for the test, or the deadline passes.
-func waitForConnectionCount(t *testing.T, a *agent, want int, timeout time.Duration) {
+func waitForConnectionCount(t *testing.T, a *agent, want int) {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(connectionCountTimeout)
 
 	for {
 		got := a.connectionCount()
@@ -416,13 +418,13 @@ func TestConnectionCountDropsAfterDisconnect(t *testing.T) {
 	first := newAgent(t, server, testID)
 	second := newAgent(t, server, testID)
 
-	waitForConnectionCount(t, first, 2, 5*time.Second)
+	waitForConnectionCount(t, first, 2)
 
 	// No close handshake: the socket simply goes away, as it does when a CI
 	// runner is killed.
 	second.close()
 
-	waitForConnectionCount(t, first, 1, 5*time.Second)
+	waitForConnectionCount(t, first, 1)
 }
 
 // TestCheckpointReleasesSurvivorsWhenParticipantDies is the CONC-6 regression
@@ -443,7 +445,7 @@ func TestCheckpointReleasesSurvivorsWhenParticipantDies(t *testing.T) {
 	second := newAgent(t, server, testID)
 	third := newAgent(t, server, testID)
 
-	waitForConnectionCount(t, first, 3, 5*time.Second)
+	waitForConnectionCount(t, first, 3)
 
 	// Two of the three join and wait. The third dies without ever arriving.
 	first.waitCheckpoint("doomed", target)
@@ -518,7 +520,7 @@ func TestCheckpointRoundsAreReusable(t *testing.T) {
 	first := newAgent(t, server, testID)
 	second := newAgent(t, server, testID)
 
-	waitForConnectionCount(t, first, 2, 5*time.Second)
+	waitForConnectionCount(t, first, 2)
 
 	for round := 1; round <= rounds; round++ {
 		first.waitCheckpoint("loop", target)

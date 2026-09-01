@@ -30,7 +30,7 @@ import (
 )
 
 // shutdownTimeout bounds the whole shutdown sequence. Shutdown used to be
-// given context.Background(), so one slow request could hold the process open
+// given [context.Background](), so one slow request could hold the process open
 // for as long as it liked and a restart would appear to hang (STAB-6).
 const shutdownTimeout = 15 * time.Second
 
@@ -134,7 +134,7 @@ func setupLogging(conf utils.LogConfig) error {
 	} else {
 		file, err := os.OpenFile(
 			path.Join(logDir, "test-sync.log"),
-			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666,
+			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600,
 		)
 		if err != nil {
 			log.Info("Failed to log to file, using default stderr")

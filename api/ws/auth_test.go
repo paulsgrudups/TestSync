@@ -1,4 +1,3 @@
-// Package ws contains WebSocket server tests.
 package ws
 
 import (
@@ -39,7 +38,7 @@ func newAuthTestServer(t *testing.T, validator *auth.Validator) *httptest.Server
 }
 
 // dialAuth dials the register route and reports the resulting status code. A
-// successful upgrade reports http.StatusSwitchingProtocols.
+// successful upgrade reports [http.StatusSwitchingProtocols].
 func dialAuth(t *testing.T, server *httptest.Server, query string, header http.Header) int {
 	t.Helper()
 

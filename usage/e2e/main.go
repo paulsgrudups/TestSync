@@ -110,11 +110,11 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 	}
 	defer func() { _ = conn.Close() }()
 
-	if err := writeWS(conn, "read_data", map[string]string{}); err != nil {
+	if err = writeWS(conn, "read_data", map[string]string{}); err != nil {
 		return err
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err = conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return err
 	}
 	_, msg, err := conn.ReadMessage()
@@ -125,11 +125,11 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 		return fmt.Errorf("WS read_data returned unexpected payload: %q", string(msg))
 	}
 
-	if err := writeWS(conn, "get_connection_count", map[string]string{}); err != nil {
+	if err = writeWS(conn, "get_connection_count", map[string]string{}); err != nil {
 		return err
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err = conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return err
 	}
 	_, msg, err = conn.ReadMessage()
@@ -138,7 +138,7 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 	}
 
 	var countMsg Message
-	if err := json.Unmarshal(msg, &countMsg); err != nil {
+	if err = json.Unmarshal(msg, &countMsg); err != nil {
 		return fmt.Errorf("failed to unmarshal count message: %w", err)
 	}
 	if countMsg.Command != "get_connection_count" {
@@ -147,21 +147,21 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 	var countPayload struct {
 		Count int `json:"count"`
 	}
-	if err := json.Unmarshal(countMsg.Content, &countPayload); err != nil {
+	if err = json.Unmarshal(countMsg.Content, &countPayload); err != nil {
 		return fmt.Errorf("failed to parse count payload: %w", err)
 	}
 	if countPayload.Count < 1 {
 		return fmt.Errorf("unexpected connection count: %d", countPayload.Count)
 	}
 
-	if err := writeWS(conn, "wait_checkpoint", map[string]any{
+	if err = writeWS(conn, "wait_checkpoint", map[string]any{
 		"identifier":   "checkpoint-1",
 		"target_count": 1,
 	}); err != nil {
 		return err
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err = conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return err
 	}
 	_, msg, err = conn.ReadMessage()

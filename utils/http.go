@@ -2,6 +2,7 @@ package utils
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -60,7 +61,7 @@ func LogRequests(next http.Handler) http.Handler {
 
 // RecoverPanics returns a handler that turns a panic in any handler below it
 // into a logged stack trace and a 500 response. net/http recovers panics in the
-// handler goroutine, but http.TimeoutHandler re-panics them in the caller's
+// handler goroutine, but [http.TimeoutHandler] re-panics them in the caller's
 // goroutine, so the server needs its own net.
 func RecoverPanics(next http.Handler) http.Handler {
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -70,9 +71,8 @@ func RecoverPanics(next http.Handler) http.Handler {
 				return
 			}
 
-			// net/http's own signal for "abort this connection quietly": it
-			// is compared by identity, never wrapped.
-			if rec == http.ErrAbortHandler {
+			// net/http's own signal for "abort this connection quietly".
+			if recErr, ok := rec.(error); ok && errors.Is(recErr, http.ErrAbortHandler) {
 				panic(rec)
 			}
 

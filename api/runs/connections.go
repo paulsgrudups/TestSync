@@ -123,7 +123,7 @@ func (t *Test) GetConnectionsSnapshot() []*wsutil.Client {
 // reach the wire.
 //
 // Shutdown uses it with [websocket.CloseServiceRestart] so that an agent can
-// tell a deploy from a crash: http.Server.Shutdown does not track hijacked
+// tell a deploy from a crash: [http.Server.Shutdown] does not track hijacked
 // connections, so without this the sockets are simply dropped and every agent
 // sees an abnormal closure (STAB-6).
 //

@@ -187,6 +187,8 @@ func (s *SQLiteStore) DeleteOlderThanExcept(limit time.Time, keepIDs []int) erro
 
 	if len(keepIDs) > 0 {
 		placeholders := strings.Repeat(",?", len(keepIDs))[1:]
+		//nolint:gosec // The appended fragment is only "?" placeholders; every
+		// keepID is passed as a bound parameter below, never interpolated.
 		query += ` AND test_id NOT IN (` + placeholders + `)`
 
 		for _, id := range keepIDs {

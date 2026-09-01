@@ -15,7 +15,7 @@ func TestSQLiteStore_SaveLoadDelete(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	if err := store.SaveData(1, []byte("data")); err != nil {
+	if err = store.SaveData(1, []byte("data")); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -27,7 +27,7 @@ func TestSQLiteStore_SaveLoadDelete(t *testing.T) {
 		t.Fatalf("unexpected load result: ok=%v data=%q", ok, string(data))
 	}
 
-	if err := store.DeleteData(1); err != nil {
+	if err = store.DeleteData(1); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 
@@ -48,11 +48,11 @@ func TestSQLiteStore_DeleteOlderThan(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	if err := store.SaveData(1, []byte("data")); err != nil {
+	if err = store.SaveData(1, []byte("data")); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
-	if err := store.DeleteOlderThanExcept(time.Now().Add(1*time.Hour), nil); err != nil {
+	if err = store.DeleteOlderThanExcept(time.Now().Add(1*time.Hour), nil); err != nil {
 		t.Fatalf("delete older than failed: %v", err)
 	}
 
@@ -86,10 +86,10 @@ func TestSQLiteStore_PersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create sqlite store: %v", err)
 	}
-	if err := store.SaveData(7, []byte("persisted")); err != nil {
+	if err = store.SaveData(7, []byte("persisted")); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
-	if err := store.Close(); err != nil {
+	if err = store.Close(); err != nil {
 		t.Fatalf("close failed: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestSQLiteStore_RecreatesUnusableDatabase(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	if err := store.SaveData(1, []byte("fresh")); err != nil {
+	if err = store.SaveData(1, []byte("fresh")); err != nil {
 		t.Fatalf("save failed on recreated database: %v", err)
 	}
 
@@ -153,21 +153,21 @@ func TestSQLiteStore_PreservesUnreadableDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create sqlite store: %v", err)
 	}
-	if err := store.SaveData(1, []byte("precious")); err != nil {
+	if err = store.SaveData(1, []byte("precious")); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
-	if err := store.Close(); err != nil {
+	if err = store.Close(); err != nil {
 		t.Fatalf("close failed: %v", err)
 	}
 
 	// A database we cannot open is not a database we may discard: only
 	// genuine corruption justifies replacing the file.
-	if err := os.Chmod(dbPath, 0o000); err != nil {
+	if err = os.Chmod(dbPath, 0o000); err != nil {
 		t.Fatalf("chmod failed: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dbPath, 0o600) })
 
-	if _, err := NewSQLiteStore(dbPath); err == nil {
+	if _, err = NewSQLiteStore(dbPath); err == nil {
 		t.Fatal("expected an unreadable database to fail rather than be recreated")
 	}
 
@@ -179,7 +179,7 @@ func TestSQLiteStore_PreservesUnreadableDatabase(t *testing.T) {
 		t.Fatalf("a healthy but unreadable database was moved aside (%d backups)", len(matches))
 	}
 
-	if err := os.Chmod(dbPath, 0o600); err != nil {
+	if err = os.Chmod(dbPath, 0o600); err != nil {
 		t.Fatalf("chmod failed: %v", err)
 	}
 

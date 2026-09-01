@@ -18,21 +18,6 @@ issues:
   # Default: 3
   max-same-issues: 50
 
-  # Exclude some noisy test-only checks to keep CI actionable
-  exclude-rules:
-    - path: "_test\\.go$"
-      linters:
-        - paralleltest
-        - testpackage
-        - revive
-        - paralleltest
-        - nosprintfhostport
-        - promlinter
-        - tparallel
-        - noctx
-        - nolintlint
-        - gochecknoglobals
-
 
 formatters:
   enable:
@@ -61,24 +46,8 @@ formatters:
 
 linters:
 
+
   enable:
-
-  disable:
-    - paralleltest
-    - testpackage
-    - nolintlint
-    - tparallel
-    - promlinter
-    - noctx
-    - gochecknoglobals
-    - reassign
-    - forbidigo
-    - cyclop
-    - gocognit
-    - funlen
-    - mnd
-
-  # enable continued:
     - asasalint # checks for pass []any as any in variadic func(...any)
     - asciicheck # checks that your code does not contain non-ASCII identifiers
     - bidichk # checks for dangerous unicode character sequences
@@ -158,26 +127,23 @@ linters:
     - usetesting # reports uses of functions with replacement inside the testing package
     - wastedassign # finds wasted assignment statements
     - whitespace # detects leading and trailing whitespace
-
-    ## you may want to enable
-    #- arangolint # opinionated best practices for arangodb client
-    #- decorder # checks declaration order and count of types, constants, variables and functions
-    #- exhaustruct_v5 # [highly recommend to enable] checks if all structure fields are initialized
-    #- ginkgolinter # [if you use ginkgo/gomega] enforces standards of using ginkgo and gomega
-    #- godox # detects usage of FIXME, TODO and other keywords inside comments
-    #- goheader # checks is file header matches to pattern
-    #- inamedparam # [great idea, but too strict, need to ignore a lot of cases by default] reports interfaces with unnamed method parameters
-    #- interfacebloat # checks the number of methods inside an interface
-    #- ireturn # accept interfaces, return concrete types
-    #- noinlineerr # disallows inline error handling `if err := ...; err != nil {`
     - prealloc # [premature optimization, but can be used in some cases] finds slice declarations that could potentially be preallocated
     - tagalign # checks that struct tags are well aligned
-    #- varnamelen # [great idea, but too many false positives] checks that the length of a variable's name matches its scope
-    #- wrapcheck # checks that errors returned from external packages are wrapped
-    #- zerologlint # detects the wrong usage of zerolog that a user forgets to dispatch zerolog.Event
 
-
-  # All settings can be found here https://github.com/golangci/golangci-lint/blob/HEAD/.golangci.reference.yml
+  disable:
+    - paralleltest
+    - testpackage
+    - nolintlint
+    - tparallel
+    - promlinter
+    - noctx
+    - gochecknoglobals
+    - reassign
+    - forbidigo
+    - cyclop
+    - gocognit
+    - funlen
+    - mnd
   settings:
     cyclop:
       # The maximal code complexity to report.
@@ -352,9 +318,13 @@ linters:
       # Settings per analyzer.
       settings:
         shadow:
-          # Whether to be strict about shadowing; can be noisy.
+          # Strict mode flags every shadowed declaration, including the
+          # idiomatic `if err := f(); err != nil` inside a function that
+          # already has an `err`. That is not a defect, so the check runs in
+          # its default mode: a shadow is reported when the outer variable is
+          # actually used again afterwards.
           # Default: false
-          strict: true
+          strict: false
 
     inamedparam:
       # Skips check for interface methods with only a single parameter.
@@ -474,6 +444,18 @@ linters:
       - text: 'comment on exported \S+ \S+ should be of the form ".+"'
         source: '// ?(nolint|TODO)'
         linters: [ revive, staticcheck ]
+      # Noisy test-only checks, kept out so CI stays actionable.
+      - path: '_test\.go'
+        linters:
+          - paralleltest
+          - testpackage
+          - revive
+          - nosprintfhostport
+          - promlinter
+          - tparallel
+          - noctx
+          - nolintlint
+          - gochecknoglobals
       - path: '_test\.go'
         linters:
           - bodyclose

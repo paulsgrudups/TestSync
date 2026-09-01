@@ -99,8 +99,8 @@ func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
 	// A server that is already holding its maximum number of runs says so with
 	// an HTTP status, before the socket is upgraded and an error can only be
 	// delivered as a close frame (STAB-3).
-	if err := runs.CanAdmitTest(testID); err != nil {
-		log.Warnf("Rejecting WebSocket registration: %s", err.Error())
+	if admitErr := runs.CanAdmitTest(testID); admitErr != nil {
+		log.Warnf("Rejecting WebSocket registration: %s", admitErr.Error())
 		utils.HTTPError(
 			w,
 			"Too many active test runs; retry once running suites finish",
