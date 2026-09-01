@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/paulsgrudups/testsync/api/monitor"
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/utils"
 
@@ -38,6 +39,9 @@ func HandleRoutes() (http.Handler, error) {
 	})
 
 	runs.RegisterTestsRoutes(router)
+
+	// Read-only monitoring API and operator page, behind the same validator.
+	monitor.RegisterRoutes(router)
 
 	return router, nil
 }

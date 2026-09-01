@@ -109,6 +109,25 @@ Routes:
   - Returns {"status":"ok"}
   - Auth: none
 
+Monitoring (read-only):
+- GET /api/v1/runs
+  - Lists every known test run with its agent, checkpoint and data counters
+  - Auth: Basic Auth using sync_client
+- GET /api/v1/runs/{testID}
+  - Returns one run: its agent connections and each checkpoint with its
+    identifier, current round, target count and joined members
+  - Auth: Basic Auth using sync_client
+- GET /ui
+  - Auto-refreshing page showing the run list and per-run detail, so an
+    operator can see which checkpoint a suite is stuck on. Embedded in the
+    binary; it loads nothing from the network
+  - Auth: Basic Auth using sync_client, through the standard 401 challenge
+
+These routes only read. They never release a barrier or change stored data, and
+they report the size of a run's stored data rather than its contents. Agents are
+numbered per run from zero in arrival order; the numbers are not reused, so a
+gap means an agent disconnected.
+
 Responses:
 - Errors are JSON: {"code": <int>, "error": "<message>"}
 - Success responses return raw bytes
@@ -136,17 +155,72 @@ Message format:
 Commands:
 - read_data: reply with raw stored data
 - update_data: replace stored data with provided content
-- get_connection_count: reply with {"count": <int>}
-- wait_checkpoint: register checkpoint barrier
+- get_connection_count: reply with {"count": <int>}, counting only connections
+  that are still alive. A disconnected agent stops being counted within one
+  command round-trip.
+- wait_checkpoint: join a checkpoint barrier
 - close: close the WS connection
 
-Checkpoint content:
+### Checkpoints
+A checkpoint is a barrier: every agent that joins it waits until the round it
+joined ends, and they are all told to resume at the same moment.
+
+Request content:
 ```
 {
   "identifier": "<string>",
-  "target_count": <int>
+  "target_count": <int>,
+  "timeout_ms": <int, optional>
 }
 ```
+
+- `identifier` names the barrier. It must not be empty.
+- `target_count` is how many distinct connections the round waits for. It must
+  be at least 1.
+- `timeout_ms` (optional, added for CONC-6) bounds how long the round may wait.
+  Omitted or `0` means the server default of 60s; anything above the server
+  maximum of 30m is clamped to it; a negative value is rejected. The deadline
+  is measured from the first agent's arrival, and the first agent of a round
+  also fixes its `target_count` and `timeout_ms` for the other participants.
+
+Reply content, sent to every participant of the round when it ends:
+```
+{
+  "identifier": "<string>",
+  "finished": <bool>,
+  "start_at": <unix milliseconds>,
+  "reason": "complete" | "timeout" | "participant_lost",
+  "generation": <int>,
+  "joined": <int>,
+  "target": <int>
+}
+```
+
+- `identifier`, `finished` and `start_at` are unchanged. `finished` is still
+  true only when every expected agent arrived, and `start_at` is still the
+  wall-clock millisecond at which the participants should resume. Both are sent
+  for every outcome, so a client that ignores the fields below keeps working.
+- `reason` (new) says why the round ended: `complete` when the target was
+  reached, `timeout` when the deadline passed first, `participant_lost` when a
+  connection went away and left too few agents to reach the target. Only
+  `complete` reports `finished: true`; the other two mean the run was **not**
+  synchronized and the agent should fail loudly instead of carrying on.
+- `generation` (new) is the round number, counting from 1 for each identifier.
+- `joined` and `target` (new) are how many agents had arrived and how many were
+  expected, which is what makes a failed barrier diagnosable.
+
+Barriers are reusable. Once a round ends, the identifier immediately starts a
+fresh, empty round, so a looping suite calls `wait_checkpoint` with the same
+identifier every iteration and each round blocks on its own. Earlier versions
+fired an identifier exactly once and released every later join immediately,
+which desynchronized looping suites silently; unique per-iteration identifiers
+are no longer needed.
+
+A round also ends when it can no longer succeed: if a connection disconnects
+and fewer connections remain than the round's `target_count`, everyone still
+waiting is released with `participant_lost` rather than waiting for an agent
+that is never coming back. An agent that disconnects before the others join is
+not detectable that way, so the round's timeout is the backstop.
 
 ## Storage
 Test data is persisted in a local SQLite database. There is no in-memory

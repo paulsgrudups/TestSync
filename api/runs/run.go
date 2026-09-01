@@ -27,11 +27,20 @@ const (
 )
 
 // Test describes a single test instance with it's saved data and connections.
+//
+// Connections are keyed by ConnID rather than held in a slice: an agent that
+// disconnects has to be able to give up its slot in the registry and in every
+// barrier it joined (CONC-5).
 type Test struct {
 	Created     time.Time
 	Data        []byte
-	Connections []*wsutil.Client
 	ForceEnd    bool
+	connections map[ConnID]*wsutil.Client
+	// ordinals numbers the connections of this run from zero, in the order
+	// they arrived, so operators have a short handle for an agent. ConnIDs
+	// are process-wide and quickly grow large, which reads badly in a UI.
+	ordinals    map[ConnID]int
+	nextOrdinal int
 	checkPoints map[string]*checkpoint
 	mu          sync.RWMutex
 }

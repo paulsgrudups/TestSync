@@ -29,21 +29,23 @@ func NewCommandHandler(service *runs.Service) *CommandHandler {
 }
 
 // Handle processes a single WebSocket message.
-func (h *CommandHandler) Handle(testID int, connIdx int, body []byte, t *runs.Test) error {
+func (h *CommandHandler) Handle(
+	testID int, connID runs.ConnID, body []byte, t *runs.Test,
+) error {
 	var m wsutil.Message
 	if err := json.Unmarshal(body, &m); err != nil {
 		return errors.Wrap(err, "could not unmarshal message")
 	}
 
 	log.WithFields(log.Fields{
-		"test_id":  testID,
-		"conn_idx": connIdx,
-		"command":  m.Command,
+		"test_id": testID,
+		"conn_id": connID,
+		"command": m.Command,
 	}).Debug("WS command received")
 
 	switch m.Command {
 	case CommandReadData:
-		client, err := getClient(t, connIdx)
+		client, err := getClient(t, connID)
 		if err != nil {
 			return err
 		}
@@ -66,7 +68,7 @@ func (h *CommandHandler) Handle(testID int, connIdx int, body []byte, t *runs.Te
 
 		return nil
 	case CommandGetConnectionCount:
-		client, err := getClient(t, connIdx)
+		client, err := getClient(t, connID)
 		if err != nil {
 			return err
 		}
@@ -79,13 +81,13 @@ func (h *CommandHandler) Handle(testID int, connIdx int, body []byte, t *runs.Te
 			}{Count: t.ConnectionCount()},
 		)
 	case CommandWaitCheckpoint:
-		if _, err := getClient(t, connIdx); err != nil {
+		if _, err := getClient(t, connID); err != nil {
 			return err
 		}
 
-		return waitCheckPoint(m.Content.Bytes, connIdx, t)
+		return waitCheckPoint(m.Content.Bytes, connID, t)
 	case CommandClose:
-		client, err := getClient(t, connIdx)
+		client, err := getClient(t, connID)
 		if err != nil {
 			return err
 		}
@@ -98,8 +100,8 @@ func (h *CommandHandler) Handle(testID int, connIdx int, body []byte, t *runs.Te
 	}
 }
 
-func getClient(t *runs.Test, idx int) (*wsutil.Client, error) {
-	client := t.GetConnection(idx)
+func getClient(t *runs.Test, connID runs.ConnID) (*wsutil.Client, error) {
+	client := t.GetConnection(connID)
 	if client == nil {
 		return nil, errors.New("connection not found")
 	}

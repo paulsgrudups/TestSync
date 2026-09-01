@@ -9,7 +9,6 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/wsutil"
 )
 
 // Command... describes available commands for websocket connection.
@@ -21,10 +20,11 @@ const (
 	CommandClose              = "close"
 )
 
-func waitCheckPoint(b []byte, connIdx int, t *runs.Test) error {
+func waitCheckPoint(b []byte, connID runs.ConnID, t *runs.Test) error {
 	var check struct {
 		TargetCount int    `json:"target_count"`
 		Identifier  string `json:"identifier"`
+		TimeoutMS   int64  `json:"timeout_ms"`
 	}
 
 	err := json.Unmarshal(b, &check)
@@ -46,31 +46,26 @@ func waitCheckPoint(b []byte, connIdx int, t *runs.Test) error {
 		)
 	}
 
-	// Joining is synchronous and never blocks. If this connection is the one
-	// that completes the checkpoint, every member has been notified by the
-	// time this returns.
-	if !t.JoinCheckpoint(check.Identifier, check.TargetCount, connIdx) {
-		return nil
+	// timeout_ms is optional: an omitted or zero field asks for the server
+	// default, and an unreasonably large one is clamped rather than honoured.
+	// A negative one is a client bug worth reporting.
+	if check.TimeoutMS < 0 {
+		return fmt.Errorf(
+			"checkpoint %q timeout must not be negative, got %d ms",
+			check.Identifier, check.TimeoutMS,
+		)
 	}
 
-	// The checkpoint had already finished before this connection joined, so
-	// send it the checkpoint's status instead.
-	err = wsutil.SendMessage(
-		t.GetConnection(connIdx),
-		"wait_checkpoint",
-		struct {
-			Command    string `json:"command"`
-			Identifier string `json:"identifier"`
-			Finished   bool   `json:"finished"`
-		}{
-			Command:    "wait_checkpoint",
-			Identifier: check.Identifier,
-			Finished:   true,
-		},
+	// Joining is synchronous and never blocks. If this connection is the one
+	// that completes the checkpoint, every member has been notified by the
+	// time this returns. Otherwise the round ends on its own deadline or when
+	// it loses a participant, and this connection is told either way.
+	t.JoinCheckpoint(
+		check.Identifier,
+		check.TargetCount,
+		runs.CheckpointTimeout(check.TimeoutMS),
+		connID,
 	)
-	if err != nil {
-		return errors.Wrap(err, "could not send checkpoint update")
-	}
 
 	return nil
 }

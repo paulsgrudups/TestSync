@@ -37,11 +37,17 @@ func TestMain(m *testing.M) {
 }
 
 // checkpointRelease is the payload every participant receives when a
-// checkpoint fires. The field names are part of the wire protocol.
+// checkpoint round ends. The field names are part of the wire protocol:
+// identifier, finished and start_at are the original three, the rest were
+// added for CONC-6 and CONC-8.
 type checkpointRelease struct {
 	Identifier string `json:"identifier"`
 	Finished   bool   `json:"finished"`
 	StartAt    int64  `json:"start_at"`
+	Reason     string `json:"reason"`
+	Generation int    `json:"generation"`
+	Joined     int    `json:"joined"`
+	Target     int    `json:"target"`
 }
 
 // newCheckpointTestServer starts a WebSocket server for a test ID with no
@@ -140,6 +146,81 @@ func (a *agent) waitCheckpoint(identifier string, target int) {
 		"identifier":   identifier,
 		"target_count": target,
 	})
+}
+
+// waitCheckpointWithin joins a checkpoint with an explicit round timeout.
+func (a *agent) waitCheckpointWithin(identifier string, target int, timeout time.Duration) {
+	a.send(CommandWaitCheckpoint, map[string]any{
+		"identifier":   identifier,
+		"target_count": target,
+		"timeout_ms":   timeout.Milliseconds(),
+	})
+}
+
+// connectionCount asks the server how many connections the test currently
+// holds. It returns -1 when the answer does not arrive.
+func (a *agent) connectionCount() int {
+	a.send(CommandGetConnectionCount, map[string]string{})
+
+	m, ok := a.expect(CommandGetConnectionCount, 5*time.Second)
+	if !ok {
+		return -1
+	}
+
+	var payload struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(m.Content.Bytes, &payload); err != nil {
+		a.t.Fatalf("could not parse connection count: %v", err)
+	}
+
+	return payload.Count
+}
+
+// awaitProcessed round-trips one cheap command, which proves that everything
+// this agent sent beforehand has already been handled: a connection's messages
+// are read and dispatched in order by its own reader goroutine.
+func (a *agent) awaitProcessed() {
+	a.connectionCount()
+}
+
+// awaitRelease waits for this agent's next checkpoint message and decodes it.
+func (a *agent) awaitRelease(timeout time.Duration) (checkpointRelease, bool) {
+	a.t.Helper()
+
+	m, ok := a.expect(CommandWaitCheckpoint, timeout)
+	if !ok {
+		return checkpointRelease{}, false
+	}
+
+	var release checkpointRelease
+	if err := json.Unmarshal(m.Content.Bytes, &release); err != nil {
+		a.t.Errorf("could not parse release: %v", err)
+		return checkpointRelease{}, false
+	}
+
+	return release, true
+}
+
+// waitForConnectionCount polls until the server reports the wanted number of
+// connections for the test, or the deadline passes.
+func waitForConnectionCount(t *testing.T, a *agent, want int, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+
+	for {
+		got := a.connectionCount()
+		if got == want {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("connection count did not reach %d, last value %d", want, got)
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // expect waits for the next message and asserts its command.
@@ -318,5 +399,151 @@ func waitForGoroutines(t *testing.T, limit int, timeout time.Duration) {
 		}
 
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestConnectionCountDropsAfterDisconnect is the CONC-5 regression test.
+//
+// A connection's identity used to be its index in an append-only slice, so
+// nothing could ever be removed: get_connection_count kept counting agents
+// that had gone away, and every agent that sized a barrier from that count
+// sized it wrong.
+func TestConnectionCountDropsAfterDisconnect(t *testing.T) {
+	const testID = 20
+
+	server := newCheckpointTestServer(t, testID)
+
+	first := newAgent(t, server, testID)
+	second := newAgent(t, server, testID)
+
+	waitForConnectionCount(t, first, 2, 5*time.Second)
+
+	// No close handshake: the socket simply goes away, as it does when a CI
+	// runner is killed.
+	second.close()
+
+	waitForConnectionCount(t, first, 1, 5*time.Second)
+}
+
+// TestCheckpointReleasesSurvivorsWhenParticipantDies is the CONC-6 regression
+// test.
+//
+// A barrier had no participant-loss detection, so an agent that died before
+// reaching the checkpoint left every other agent waiting for a count that
+// could never be reached, for as long as the CI job lasted.
+func TestCheckpointReleasesSurvivorsWhenParticipantDies(t *testing.T) {
+	const (
+		testID = 21
+		target = 3
+	)
+
+	server := newCheckpointTestServer(t, testID)
+
+	first := newAgent(t, server, testID)
+	second := newAgent(t, server, testID)
+	third := newAgent(t, server, testID)
+
+	waitForConnectionCount(t, first, 3, 5*time.Second)
+
+	// Two of the three join and wait. The third dies without ever arriving.
+	first.waitCheckpoint("doomed", target)
+	second.waitCheckpoint("doomed", target)
+	first.awaitProcessed()
+	second.awaitProcessed()
+
+	third.close()
+
+	for name, a := range map[string]*agent{"first": first, "second": second} {
+		release, ok := a.awaitRelease(time.Second)
+		if !ok {
+			continue
+		}
+
+		if release.Finished {
+			t.Errorf("%s: barrier reported success without every agent: %+v", name, release)
+		}
+		if release.Reason != "participant_lost" {
+			t.Errorf("%s: expected reason participant_lost, got %q", name, release.Reason)
+		}
+		if release.Joined != 2 || release.Target != target {
+			t.Errorf("%s: expected 2 of %d joined, got %+v", name, target, release)
+		}
+	}
+}
+
+// TestCheckpointTimesOutStalledRound is the other half of CONC-6: an agent
+// that never arrives, and never disconnects either, must not hold the barrier
+// past the round's deadline.
+func TestCheckpointTimesOutStalledRound(t *testing.T) {
+	const (
+		testID = 22
+		target = 2
+	)
+
+	server := newCheckpointTestServer(t, testID)
+
+	lonely := newAgent(t, server, testID)
+	lonely.waitCheckpointWithin("stalled", target, 300*time.Millisecond)
+
+	release, ok := lonely.awaitRelease(5 * time.Second)
+	if !ok {
+		return
+	}
+
+	if release.Finished {
+		t.Errorf("barrier reported success with one agent: %+v", release)
+	}
+	if release.Reason != "timeout" {
+		t.Errorf("expected reason timeout, got %q", release.Reason)
+	}
+	if release.Joined != 1 || release.Target != target {
+		t.Errorf("expected 1 of %d joined, got %+v", target, release)
+	}
+}
+
+// TestCheckpointRoundsAreReusable is the CONC-8 regression test.
+//
+// A checkpoint identifier used to fire exactly once, after which every join
+// was released immediately. A looping suite that reuses an identifier
+// therefore desynchronized silently from its second round onwards.
+func TestCheckpointRoundsAreReusable(t *testing.T) {
+	const (
+		testID = 23
+		rounds = 3
+		target = 2
+	)
+
+	server := newCheckpointTestServer(t, testID)
+
+	first := newAgent(t, server, testID)
+	second := newAgent(t, server, testID)
+
+	waitForConnectionCount(t, first, 2, 5*time.Second)
+
+	for round := 1; round <= rounds; round++ {
+		first.waitCheckpoint("loop", target)
+		first.awaitProcessed()
+
+		// The round must block: one agent of two is not a synchronized run.
+		first.expectSilence(300 * time.Millisecond)
+
+		second.waitCheckpoint("loop", target)
+
+		for name, a := range map[string]*agent{"first": first, "second": second} {
+			release, ok := a.awaitRelease(5 * time.Second)
+			if !ok {
+				t.Fatalf("%s: no release in round %d", name, round)
+			}
+
+			if !release.Finished || release.Reason != "complete" {
+				t.Fatalf("%s: round %d released as %+v", name, round, release)
+			}
+			if release.Generation != round {
+				t.Fatalf("%s: round %d reported generation %d", name, round, release.Generation)
+			}
+			if release.StartAt == 0 {
+				t.Fatalf("%s: round %d has no start_at", name, round)
+			}
+		}
 	}
 }

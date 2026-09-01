@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>TestSync monitor</title>
+<!-- Inline icon: the page must make no request the server does not answer. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231f5fd6'/%3E%3Ccircle cx='8' cy='8' r='3' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">TestSync</span>
+      <span class="brand-sub">run monitor</span>
+    </div>
+
+    <div class="controls">
+      <p class="feed" id="feed-status" role="status">
+        <span class="dot" id="feed-dot" aria-hidden="true"></span>
+        <span id="feed-text">Connecting&hellip;</span>
+      </p>
+
+      <label class="control" for="interval">
+        Refresh
+        <select id="interval">
+          <option value="1000">1s</option>
+          <option value="2000" selected>2s</option>
+          <option value="5000">5s</option>
+          <option value="10000">10s</option>
+          <option value="30000">30s</option>
+        </select>
+      </label>
+
+      <button type="button" id="pause" aria-pressed="false">Pause</button>
+      <button type="button" id="refresh">Refresh now</button>
+    </div>
+  </div>
+</header>
+
+<p class="banner" id="banner" role="alert" hidden></p>
+
+<main id="main">
+  <section id="list-view" aria-labelledby="list-heading">
+    <div class="section-head">
+      <h1 id="list-heading">Test runs</h1>
+      <p class="section-note" id="list-summary"></p>
+    </div>
+    <div id="list-body"></div>
+  </section>
+
+  <section id="detail-view" aria-labelledby="detail-heading" hidden>
+    <p><a class="back" href="#/">&larr; All runs</a></p>
+
+    <div class="section-head">
+      <h1 id="detail-heading">Run</h1>
+      <p class="section-note" id="detail-summary"></p>
+    </div>
+
+    <div id="detail-body"></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>Read-only view. Stored test payloads are never shown here &mdash; sizes and counts only.</p>
+</footer>
+
+<script src="/ui/app.js" defer></script>
+</body>
+</html>

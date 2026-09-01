@@ -131,13 +131,15 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 	})
 
 	r := runs.EnsureTest(testID, func() *runs.Test {
-		return &runs.Test{
-			Created:     time.Now(),
-			Connections: []*wsutil.Client{},
-		}
+		return &runs.Test{Created: time.Now()}
 	})
 
-	idx := r.AddConnection(client)
+	// The connection is registered under an ID owned by this reader alone.
+	// However the goroutine exits, panics included, the connection stops being
+	// counted and gives up its slot in every barrier it joined, instead of
+	// holding the other agents there (CONC-5, CONC-6).
+	connID := r.AddConnection(client)
+	defer r.RemoveConnection(connID)
 
 	for {
 		messageType, p, err := conn.ReadMessage()
@@ -164,7 +166,7 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 			handler = NewCommandHandler(nil)
 		}
 
-		err = handler.Handle(testID, idx, p, r)
+		err = handler.Handle(testID, connID, p, r)
 		if err != nil {
 			log.Errorf("Failed to process message: %s", err.Error())
 		}
