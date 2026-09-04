@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/paulsgrudups/testsync/internal/app"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
@@ -15,6 +16,12 @@ import (
 type Server struct {
 	HTTPServer *http.Server
 	Handler    *CommandHandler
+
+	// app carries the registry and the validator this server works against.
+	// Both used to be package globals installed by startup, so a WebSocket
+	// server could not be built for anything but the one process-wide
+	// instance (CODE-1).
+	app *app.App
 
 	// listenErr carries a fatal listen error, such as a port already in use,
 	// out of the accept goroutine. It used to be discarded there, leaving the
@@ -38,12 +45,16 @@ func (s *Server) pongWaitDuration() time.Duration {
 	return wsutil.PongWait
 }
 
-// StartWebSocketServer launches a new websocket server on the given port. A
-// fatal listen error is delivered on [Server.ListenErr] rather than crashing
-// the accept goroutine or being swallowed.
-func StartWebSocketServer(port int) *Server {
+// StartWebSocketServer launches a websocket server for the given application,
+// on the port its configuration names. A fatal listen error is delivered on
+// [Server.ListenErr] rather than crashing the accept goroutine or being
+// swallowed.
+func StartWebSocketServer(a *app.App) *Server {
+	port := a.Config.WSPort
+
 	s := &Server{
-		Handler:   NewCommandHandler(nil),
+		Handler:   NewCommandHandler(a.Service),
+		app:       a,
 		listenErr: make(chan error, 1),
 	}
 

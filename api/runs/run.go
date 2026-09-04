@@ -37,26 +37,33 @@ type Test struct {
 	nextOrdinal int
 	checkPoints map[string]*checkpoint
 	mu          sync.RWMutex
+
+	// limits is copied from the registry that created this run. It is fixed
+	// for the run's lifetime, so enforcing a per-run limit costs no shared
+	// state and no lock beyond the run's own (CODE-1).
+	limits Limits
 }
 
-// RegisterTestsRoutes registers all tests routes. It has no side effects: the
-// background sweep is owned by a [Janitor] the process starts and stops, not
-// by route registration (STAB-5).
-func RegisterTestsRoutes(r *mux.Router) {
+// RegisterTestsRoutes registers all tests routes against the given service.
+//
+// It has no side effects: the background sweep is owned by a [Janitor] the
+// process starts and stops, not by route registration (STAB-5). The validator
+// is a parameter rather than a global read at request time, so a route cannot
+// be registered before credentials exist and end up open (SEC-1) — there is no
+// order in which these routes can be built without one.
+func RegisterTestsRoutes(r *mux.Router, svc *Service, validator *auth.Validator) {
 	subrouter := r.PathPrefix(`/tests/{testID:\d+}`).
 		Subrouter().StrictSlash(false)
 
-	// The shared validator is resolved per request, so these routes cannot be
-	// registered before credentials are configured and end up open (SEC-1).
-	subrouter.Use(auth.SharedMiddleware())
+	subrouter.Use(auth.BasicAuthMiddleware(validator))
 
-	subrouter.HandleFunc(`/`, createHandler).Methods(http.MethodPost)
-	subrouter.HandleFunc(``, createHandler).Methods(http.MethodPost)
-	subrouter.HandleFunc(`/`, readHandler).Methods(http.MethodGet)
-	subrouter.HandleFunc(``, readHandler).Methods(http.MethodGet)
+	subrouter.HandleFunc(`/`, svc.createHandler).Methods(http.MethodPost)
+	subrouter.HandleFunc(``, svc.createHandler).Methods(http.MethodPost)
+	subrouter.HandleFunc(`/`, svc.readHandler).Methods(http.MethodGet)
+	subrouter.HandleFunc(``, svc.readHandler).Methods(http.MethodGet)
 }
 
-func createHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Service) createHandler(w http.ResponseWriter, r *http.Request) {
 	testID, err := GetPathID(w, r, "testID")
 	if err != nil {
 		log.Errorf("Could not get test ID: %s", err.Error())
@@ -65,13 +72,13 @@ func createHandler(w http.ResponseWriter, r *http.Request) {
 
 	logger := log.WithField("test_id", testID)
 
-	body, err := readBodyData(w, r.Body)
+	body, err := s.readBodyData(w, r.Body)
 	if err != nil {
 		logger.Errorf("Could not read body data: %s", err.Error())
 		return
 	}
 
-	if err := DefaultService.CreateTestData(testID, body); err != nil {
+	if err := s.CreateTestData(testID, body); err != nil {
 		if stderrors.Is(err, ErrTestExists) {
 			utils.HTTPError(
 				w, "Provided test already has set data", http.StatusConflict,
@@ -93,7 +100,7 @@ func createHandler(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, body, http.StatusOK)
 }
 
-func readHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Service) readHandler(w http.ResponseWriter, r *http.Request) {
 	testID, err := GetPathID(w, r, "testID")
 	if err != nil {
 		return
@@ -101,7 +108,7 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 
 	logger := log.WithField("test_id", testID)
 
-	data, err := DefaultService.ReadTestData(testID)
+	data, err := s.ReadTestData(testID)
 	if err != nil {
 		if stderrors.Is(err, ErrTestNotFound) {
 			logger.Debug("Data not found")
@@ -119,7 +126,9 @@ func readHandler(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, data, http.StatusOK)
 }
 
-func readBodyData(w http.ResponseWriter, body io.ReadCloser) ([]byte, error) {
+func (s *Service) readBodyData(
+	w http.ResponseWriter, body io.ReadCloser,
+) ([]byte, error) {
 	if body == nil {
 		return nil, nil
 	}
@@ -130,7 +139,7 @@ func readBodyData(w http.ResponseWriter, body io.ReadCloser) ([]byte, error) {
 	// payload and a WebSocket frame, so a payload is accepted or refused the
 	// same way whichever path it arrives on.
 	bodyContent, err := io.ReadAll(
-		http.MaxBytesReader(w, body, CurrentLimits().MaxDataBytes),
+		http.MaxBytesReader(w, body, s.registry.Limits().MaxDataBytes),
 	)
 	if err != nil {
 		log.Debugf("Could not read body: %s", err.Error())

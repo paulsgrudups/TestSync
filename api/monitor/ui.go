@@ -35,9 +35,9 @@ var (
 // registerUIRoutes serves the operator page and its two assets. They are
 // listed one by one rather than served from a file server: there is no
 // directory listing, no path to traverse and no guessing about content types.
-func registerUIRoutes(r *mux.Router) {
+func registerUIRoutes(r *mux.Router, validator *auth.Validator) {
 	uiRouter := r.PathPrefix(UIPrefix).Subrouter().StrictSlash(false)
-	uiRouter.Use(challengeUnauthorized, auth.SharedMiddleware())
+	uiRouter.Use(challengeUnauthorized, auth.BasicAuthMiddleware(validator))
 
 	page := assetHandler("text/html; charset=UTF-8", indexHTML)
 

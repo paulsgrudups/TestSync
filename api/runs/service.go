@@ -12,26 +12,40 @@ var (
 	ErrTestExists = errors.New("test data already exists")
 	// ErrTestNotFound indicates test data not found.
 	ErrTestNotFound = errors.New("test data not found")
+	// ErrNoDataStore indicates the service was built without a data store.
+	// Every operation that would touch storage reports it rather than
+	// dereferencing a nil interface.
+	ErrNoDataStore = errors.New("data store not initialised")
 )
 
-// Service provides higher level operations for test data.
+// Service provides the higher level operations for test data. It owns the
+// data store and the registry it works against, so a handler never has to
+// resolve either from package state (CODE-1).
 type Service struct {
-	dataStore storage.DataStore
+	store    storage.DataStore
+	registry *Registry
 }
 
-// DefaultService is the package-level service used by handlers. SetDataStore
-// rebinds it once the store exists.
-var DefaultService = NewService(nil)
-
-// NewService creates a service backed by the provided store. A nil store falls
-// back to the package-level Store, resolved once here rather than on every
-// call: a service that resolves to no store cannot acquire one later.
-func NewService(store storage.DataStore) *Service {
+// NewService creates a service backed by the given store and registry.
+//
+// The store is resolved once, here, rather than on every call: a service that
+// is built without one can never acquire one later, so it is given a stand-in
+// that reports [ErrNoDataStore] instead of panicking on first use.
+func NewService(store storage.DataStore, registry *Registry) *Service {
 	if store == nil {
-		store = Store
+		store = missingStore{}
 	}
 
-	return &Service{dataStore: store}
+	if registry == nil {
+		registry = NewRegistry(DefaultLimits())
+	}
+
+	return &Service{store: store, registry: registry}
+}
+
+// Registry returns the registry this service works against.
+func (s *Service) Registry() *Registry {
+	return s.registry
 }
 
 // CreateTestData stores test data if it does not already exist. A payload
@@ -39,64 +53,65 @@ func NewService(store storage.DataStore) *Service {
 // run that would take the server past limits.max_tests is refused with
 // [ErrTestLimitReached]; neither is stored (STAB-3).
 func (s *Service) CreateTestData(testID int, data []byte) error {
-	if err := checkDataSize(data); err != nil {
+	if err := s.registry.Limits().checkDataSize(data); err != nil {
 		return err
 	}
 
-	if _, ok := GetTest(testID); ok {
+	if _, ok := s.registry.Get(testID); ok {
 		return ErrTestExists
 	}
 
-	if _, ok, err := s.dataStore.LoadData(testID); err != nil {
+	if _, ok, err := s.store.LoadData(testID); err != nil {
 		return err
 	} else if ok {
 		return ErrTestExists
 	}
 
 	// Checked before the payload is written, so that a run refused for being
-	// one too many does not leave a row behind. EnsureTest below is still the
-	// enforcement point: it decides under the registry's own lock.
-	if err := CanAdmitTest(testID); err != nil {
+	// one too many does not leave a row behind. Registry.Ensure below is still
+	// the enforcement point: it decides under the registry's own lock.
+	if err := s.registry.CanAdmit(testID); err != nil {
 		return err
 	}
 
-	if err := s.dataStore.SaveData(testID, data); err != nil {
+	if err := s.store.SaveData(testID, data); err != nil {
 		return err
 	}
 
-	return registerData(testID, data)
+	return s.registerData(testID, data)
 }
 
 // UpdateTestData stores test data regardless of existing state. The same two
 // limits apply as for [Service.CreateTestData].
 func (s *Service) UpdateTestData(testID int, data []byte) error {
-	if err := checkDataSize(data); err != nil {
+	if err := s.registry.Limits().checkDataSize(data); err != nil {
 		return err
 	}
 
-	if err := CanAdmitTest(testID); err != nil {
+	if err := s.registry.CanAdmit(testID); err != nil {
 		return err
 	}
 
-	if err := s.dataStore.SaveData(testID, data); err != nil {
+	if err := s.store.SaveData(testID, data); err != nil {
 		return err
 	}
 
-	return registerData(testID, data)
+	return s.registerData(testID, data)
 }
 
 // ReadTestData returns test data or ErrTestNotFound.
 func (s *Service) ReadTestData(testID int) ([]byte, error) {
-	data, ok, err := s.dataStore.LoadData(testID)
+	data, ok, err := s.store.LoadData(testID)
 	if err != nil {
 		return nil, err
 	}
+
 	if ok {
 		return data, nil
 	}
 
-	if m, exists := GetTest(testID); exists {
-		data = m.GetData()
+	if t, exists := s.registry.Get(testID); exists {
+		data = t.GetData()
 		if len(data) > 0 {
 			return data, nil
 		}
@@ -105,12 +120,18 @@ func (s *Service) ReadTestData(testID int) ([]byte, error) {
 	return nil, ErrTestNotFound
 }
 
+// DeleteDataOlderThan removes test data older than limit, except for the runs
+// in keep. The janitor keeps the runs whose agents are still connected, so a
+// suite that is still running does not have its stored data deleted from
+// under it (STAB-4).
+func (s *Service) DeleteDataOlderThan(limit time.Time, keep []int) error {
+	return s.store.DeleteOlderThanExcept(limit, keep)
+}
+
 // registerData records the payload against its run, creating the run when it
 // is new. Creating one is refused once the server holds limits.max_tests runs.
-func registerData(testID int, data []byte) error {
-	t, err := EnsureTest(testID, func() *Test {
-		return &Test{Created: nowUTC(), Data: data}
-	})
+func (s *Service) registerData(testID int, data []byte) error {
+	t, err := s.registry.Ensure(testID)
 	if err != nil {
 		return err
 	}
@@ -120,6 +141,17 @@ func registerData(testID int, data []byte) error {
 	return nil
 }
 
-func nowUTC() time.Time {
-	return time.Now().UTC()
-}
+// missingStore stands in for a store that was never supplied. It reports the
+// misconfiguration on every call rather than letting a nil interface panic in
+// a request goroutine.
+type missingStore struct{}
+
+func (missingStore) SaveData(int, []byte) error { return ErrNoDataStore }
+
+func (missingStore) LoadData(int) ([]byte, bool, error) { return nil, false, ErrNoDataStore }
+
+func (missingStore) DeleteData(int) error { return ErrNoDataStore }
+
+func (missingStore) DeleteOlderThanExcept(time.Time, []int) error { return ErrNoDataStore }
+
+func (missingStore) Close() error { return nil }

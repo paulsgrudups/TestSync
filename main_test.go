@@ -30,51 +30,39 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return buf
 }
 
-// resetSharedValidator restores the process-wide validator after a test.
-func resetSharedValidator(t *testing.T) {
-	t.Helper()
-
-	previous := auth.Shared()
-	t.Cleanup(func() { auth.SetShared(previous) })
-
-	auth.SetShared(nil)
-}
-
 // TestSetupAuthRequiresCredentials covers SEC-1: startup with no credentials
 // and no explicit opt-out is a fatal error, not a silently open server.
 func TestSetupAuthRequiresCredentials(t *testing.T) {
 	captureLog(t)
-	resetSharedValidator(t)
 
 	conf := utils.Config{}
 	utils.ApplyDefaults(&conf)
 
-	err := setupAuth(conf, false)
+	validator, err := setupAuth(conf, false)
 	if !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("expected ErrNoCredentials, got %v", err)
 	}
 
-	if auth.Shared().Validate("attacker", "guess") {
+	if validator.Validate("attacker", "guess") {
 		t.Fatal("a failed auth setup left the server open")
 	}
 }
 
-// TestSetupAuthInstallsSharedValidator covers the configured case: one
-// validator serves both the HTTP and the WebSocket path.
-func TestSetupAuthInstallsSharedValidator(t *testing.T) {
+// TestSetupAuthBuildsValidator covers the configured case: one validator is
+// built for the App, and both the HTTP and the WebSocket path use it.
+func TestSetupAuthBuildsValidator(t *testing.T) {
 	captureLog(t)
-	resetSharedValidator(t)
 
 	conf := utils.Config{
 		SyncClient: utils.BasicCredentials{Username: "user", Password: "pass"},
 	}
 	utils.ApplyDefaults(&conf)
 
-	if err := setupAuth(conf, false); err != nil {
+	validator, err := setupAuth(conf, false)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	validator := auth.Shared()
 	if validator.Disabled() {
 		t.Fatal("authentication must not be disabled for a configured credential")
 	}
@@ -105,20 +93,20 @@ func TestSetupAuthOptOutWarns(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			logs := captureLog(t)
-			resetSharedValidator(t)
 
 			conf := tc.conf
 			utils.ApplyDefaults(&conf)
 
-			if err := setupAuth(conf, tc.insecure); err != nil {
+			validator, err := setupAuth(conf, tc.insecure)
+			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if !auth.Shared().Disabled() {
+			if !validator.Disabled() {
 				t.Fatal("expected authentication to be disabled")
 			}
 
-			if !auth.Shared().Validate("", "") {
+			if !validator.Validate("", "") {
 				t.Fatal("expected a credential-less caller to be accepted")
 			}
 
@@ -137,18 +125,18 @@ func TestSetupAuthOptOutWarns(t *testing.T) {
 // rather than fall back to something permissive.
 func TestSetupAuthUnknownMode(t *testing.T) {
 	captureLog(t)
-	resetSharedValidator(t)
 
 	conf := utils.Config{
 		Auth:       utils.AuthConfig{Mode: "off"},
 		SyncClient: utils.BasicCredentials{Username: "user", Password: "pass"},
 	}
 
-	if err := setupAuth(conf, false); !errors.Is(err, auth.ErrUnknownAuthMode) {
+	validator, err := setupAuth(conf, false)
+	if !errors.Is(err, auth.ErrUnknownAuthMode) {
 		t.Fatalf("expected ErrUnknownAuthMode, got %v", err)
 	}
 
-	if auth.Shared().Validate("user", "pass") {
-		t.Fatal("a failed auth setup installed a validator")
+	if validator.Validate("user", "pass") {
+		t.Fatal("a failed auth setup returned a usable validator")
 	}
 }

@@ -18,14 +18,13 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/paulsgrudups/testsync/api/runs"
+	"github.com/paulsgrudups/testsync/internal/apptest"
 )
 
-// newLifecycleServer starts a WebSocket server with no connection history for
-// the given test ID.
-func newLifecycleServer(t *testing.T, s *Server, testID int) *httptest.Server {
+// newLifecycleServer starts a WebSocket server over its own registry, so it
+// begins with no connection history whatever ran before it.
+func newLifecycleServer(t *testing.T, s *Server) *httptest.Server {
 	t.Helper()
-
-	runs.DeleteTest(testID)
 
 	httpServer := httptest.NewServer(newWSRouter(s))
 	t.Cleanup(httpServer.Close)
@@ -105,7 +104,8 @@ func TestRegisterRejectsUnusableTestID(t *testing.T) {
 		overflowID = "9999999999999999999"  // 19 digits: routable, but overflows
 	)
 
-	server := newLifecycleServer(t, &Server{Handler: NewCommandHandler(nil)}, 0)
+	ws := newInsecureServer(t)
+	server := newLifecycleServer(t, ws)
 
 	baselineGoroutines := runtime.NumGoroutine()
 	baselineFDs := openFileDescriptors()
@@ -152,11 +152,10 @@ func TestReaderReapsUnresponsivePeer(t *testing.T) {
 
 	// A short pong wait keeps the test quick; the production default is
 	// wsutil.PongWait, three ping periods.
-	server := newLifecycleServer(
-		t,
-		&Server{Handler: NewCommandHandler(nil), pongWait: 500 * time.Millisecond},
-		testID,
-	)
+	ws := newInsecureServer(t)
+	ws.pongWait = 500 * time.Millisecond
+
+	server := newLifecycleServer(t, ws)
 
 	baseline := runtime.NumGoroutine()
 
@@ -192,11 +191,10 @@ func TestPongExtendsReadDeadline(t *testing.T) {
 		pongs    = 5
 	)
 
-	server := newLifecycleServer(
-		t,
-		&Server{Handler: NewCommandHandler(nil), pongWait: pongWait},
-		testID,
-	)
+	ws := newInsecureServer(t)
+	ws.pongWait = pongWait
+
+	server := newLifecycleServer(t, ws)
 
 	conn := dialRaw(t, server, fmt.Sprintf("/register/%d", testID))
 
@@ -226,11 +224,8 @@ func TestReaderRejectsOversizedFrame(t *testing.T) {
 		declaredLen = uint64(64 << 20)
 	)
 
-	server := newLifecycleServer(
-		t,
-		&Server{Handler: NewCommandHandler(nil)},
-		testID,
-	)
+	ws := newInsecureServer(t)
+	server := newLifecycleServer(t, ws)
 
 	conn := dialRaw(t, server, fmt.Sprintf("/register/%d", testID))
 
@@ -280,11 +275,16 @@ func (panickingStore) Close() error { return nil }
 func TestPanicInHandlerKillsOnlyOneConnection(t *testing.T) {
 	const testID = 13
 
-	server := newLifecycleServer(
-		t,
-		&Server{Handler: NewCommandHandler(runs.NewService(panickingStore{}))},
-		testID,
-	)
+	// The store panics on every read, which is the failure this test is about.
+	application := apptest.NewInsecure(t)
+	ws := &Server{
+		Handler: NewCommandHandler(
+			runs.NewService(panickingStore{}, application.Registry),
+		),
+		app: application,
+	}
+
+	server := newLifecycleServer(t, ws)
 
 	path := fmt.Sprintf("/register/%d", testID)
 	victim := dialRaw(t, server, path)
@@ -329,7 +329,9 @@ func assertServesConnectionCount(t *testing.T, conn *websocket.Conn) {
 // STAB-1: a panic in a route handler is logged and answered with a 500 rather
 // than unwinding into the caller.
 func TestWSRouterRecoversHandlerPanic(t *testing.T) {
-	router, ok := newWSRouter(&Server{Handler: NewCommandHandler(nil)}).(*mux.Router)
+	server := newInsecureServer(t)
+
+	router, ok := newWSRouter(server).(*mux.Router)
 	if !ok {
 		t.Fatal("expected newWSRouter to return a *mux.Router")
 	}
@@ -357,11 +359,8 @@ func TestConcurrentRegistrationsDoNotRaceOnUpgrader(t *testing.T) {
 		connections = 16
 	)
 
-	server := newLifecycleServer(
-		t,
-		&Server{Handler: NewCommandHandler(nil)},
-		testID,
-	)
+	ws := newInsecureServer(t)
+	server := newLifecycleServer(t, ws)
 
 	url := fmt.Sprintf(
 		"ws%s/register/%d", strings.TrimPrefix(server.URL, "http"), testID,

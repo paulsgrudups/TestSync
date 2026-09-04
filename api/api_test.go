@@ -7,40 +7,26 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/paulsgrudups/testsync/api/auth"
-	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/internal/storagetest"
-	"github.com/paulsgrudups/testsync/utils"
+	"github.com/paulsgrudups/testsync/internal/apptest"
 )
 
-// installTestCredentials points the shared validator, which both the HTTP and
-// the WebSocket server authenticate through, at a known credential (SEC-1).
-func installTestCredentials(t *testing.T) {
+// newTestRouter builds a router over an application of this test's own, so
+// nothing it does is visible to any other test (TEST-2).
+func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 
-	validator, err := auth.NewValidator(
-		utils.BasicCredentials{Username: "user", Password: "pass"},
-	)
-	if err != nil {
-		t.Fatalf("failed to create validator: %v", err)
-	}
-
-	previous := auth.Shared()
-	t.Cleanup(func() { auth.SetShared(previous) })
-	auth.SetShared(validator)
-}
-
-func TestCreateAndReadTestData(t *testing.T) {
-	installTestCredentials(t)
-
-	runs.AllTests = make(map[int]*runs.Test)
-
-	runs.SetDataStore(storagetest.NewStore(t))
-
-	handler, err := HandleRoutes()
+	handler, err := NewRouter(apptest.NewDefault(t))
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
 	}
+
+	return handler
+}
+
+func TestCreateAndReadTestData(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestRouter(t)
 
 	postReq := httptest.NewRequest(http.MethodPost, "/tests/123", strings.NewReader("payload"))
 	postReq.SetBasicAuth("user", "pass")
@@ -77,14 +63,9 @@ func TestCreateAndReadTestData(t *testing.T) {
 // the real router: neither half of the credential may be guessed on its own,
 // and a request without credentials never reaches a handler.
 func TestTestsRoutesRejectBadCredentials(t *testing.T) {
-	installTestCredentials(t)
+	t.Parallel()
 
-	runs.SetDataStore(storagetest.NewStore(t))
-
-	handler, err := HandleRoutes()
-	if err != nil {
-		t.Fatalf("failed to create router: %v", err)
-	}
+	handler := newTestRouter(t)
 
 	cases := []struct {
 		name     string
@@ -100,6 +81,8 @@ func TestTestsRoutesRejectBadCredentials(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			req := httptest.NewRequest(http.MethodGet, "/tests/321", nil)
 			if tc.withAuth {
 				req.SetBasicAuth(tc.user, tc.pass)
@@ -118,13 +101,11 @@ func TestTestsRoutesRejectBadCredentials(t *testing.T) {
 // TestTestsRoutesDenyWithoutValidator covers the fail-closed default: a process
 // that never installed a validator serves nobody (SEC-1).
 func TestTestsRoutesDenyWithoutValidator(t *testing.T) {
-	previous := auth.Shared()
-	t.Cleanup(func() { auth.SetShared(previous) })
-	auth.SetShared(nil)
+	t.Parallel()
 
-	runs.SetDataStore(storagetest.NewStore(t))
-
-	handler, err := HandleRoutes()
+	handler, err := NewRouter(
+		apptest.WithValidator(t, apptest.Config(), nil),
+	)
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/paulsgrudups/testsync/api/monitor"
 	"github.com/paulsgrudups/testsync/api/runs"
+	"github.com/paulsgrudups/testsync/internal/app"
 	"github.com/paulsgrudups/testsync/utils"
 
 	"github.com/gorilla/mux"
@@ -17,8 +18,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// HandleRoutes registers all routes.
-func HandleRoutes() (http.Handler, error) {
+// NewRouter builds the HTTP handler for one application. Everything it needs
+// arrives on the App: there is no package state to install first and no order
+// in which the routes can be registered before they are authenticated
+// (CODE-1, SEC-1).
+func NewRouter(a *app.App) (http.Handler, error) {
 	router := mux.NewRouter().StrictSlash(false)
 
 	err := registerMiddlewares(router)
@@ -38,10 +42,10 @@ func HandleRoutes() (http.Handler, error) {
 		w.Write([]byte(`{"status":"ok"}`)) // nolint: gosec, errcheck
 	})
 
-	runs.RegisterTestsRoutes(router)
+	runs.RegisterTestsRoutes(router, a.Service, a.Auth)
 
 	// Read-only monitoring API and operator page, behind the same validator.
-	monitor.RegisterRoutes(router)
+	monitor.RegisterRoutes(router, a.Registry, a.Auth)
 
 	return router, nil
 }

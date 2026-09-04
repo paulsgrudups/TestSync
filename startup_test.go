@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/api/ws"
+	"github.com/paulsgrudups/testsync/internal/app"
 	"github.com/paulsgrudups/testsync/internal/storagetest"
 	"github.com/paulsgrudups/testsync/utils"
 )
@@ -180,12 +182,11 @@ func TestConfigDefaultsAreUsable(t *testing.T) {
 // failed with "sql: database is closed" — on every deploy, and looking exactly
 // like a flaky test to whoever hit it.
 func TestShutdownLetsInFlightRequestsFinish(t *testing.T) {
+	conf := utils.Config{}
+	utils.ApplyDefaults(&conf)
+
 	store := storagetest.NewStore(t)
-
-	previousStore, previousService := runs.Store, runs.DefaultService
-	t.Cleanup(func() { runs.Store, runs.DefaultService = previousStore, previousService })
-
-	runs.SetDataStore(store)
+	application := app.New(conf, store, auth.NewDisabledValidator())
 
 	if err := store.SaveData(7, []byte("payload")); err != nil {
 		t.Fatalf("failed to seed data: %v", err)
@@ -245,12 +246,14 @@ func TestShutdownLetsInFlightRequestsFinish(t *testing.T) {
 
 	<-started
 
-	janitor := runs.NewJanitor(time.Hour, time.Hour)
+	janitor := runs.NewJanitor(
+		time.Hour, time.Hour, application.Registry, application.Service,
+	)
 	janitor.Start(t.Context())
 
 	begun := time.Now()
 
-	if err := shutdown(server, &ws.Server{}, janitor, store); err != nil {
+	if err := shutdown(application, server, &ws.Server{}, janitor); err != nil {
 		t.Fatalf("shutdown reported: %v", err)
 	}
 

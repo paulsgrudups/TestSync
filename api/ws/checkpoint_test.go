@@ -14,8 +14,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/paulsgrudups/testsync/api/auth"
-	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/wsutil"
 
 	log "github.com/sirupsen/logrus"
@@ -25,12 +23,10 @@ import (
 // and are meant to be run with -count=20, which makes the per-message logging
 // unreadable.
 //
-// It also installs a disabled validator, because the server now denies every
-// unauthenticated request (SEC-1). Tests that exercise authentication install
-// their own validator and restore this one.
+// Authentication is no longer set up here. Each server carries its own
+// validator, so a test that wants an open server asks for one (SEC-1, CODE-1).
 func TestMain(m *testing.M) {
 	log.SetOutput(io.Discard)
-	auth.SetShared(auth.NewDisabledValidator())
 
 	os.Exit(m.Run())
 }
@@ -49,15 +45,13 @@ type checkpointRelease struct {
 	Target     int    `json:"target"`
 }
 
-// newCheckpointTestServer starts a WebSocket server for a test ID with no
-// checkpoint history. DeleteTest is used rather than replacing runs.AllTests
-// because it takes the registry lock (see CONC-12).
-func newCheckpointTestServer(t *testing.T, testID int) *httptest.Server {
+// newCheckpointTestServer starts a WebSocket server over a registry of its
+// own, so it begins with no checkpoint history whatever ran before it.
+func newCheckpointTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
-	runs.DeleteTest(testID)
+	server := newInsecureServer(t)
 
-	server := &Server{Handler: NewCommandHandler(nil)}
 	httpServer := httptest.NewServer(newWSRouter(server))
 	t.Cleanup(httpServer.Close)
 
@@ -261,13 +255,15 @@ func (a *agent) expectSilence(window time.Duration) {
 // wedged its reader goroutine permanently: the connection stayed open at the
 // TCP level but never answered another command.
 func TestCheckpointReleasesEveryParticipant(t *testing.T) {
+	t.Parallel()
+
 	const (
 		connections = 32
 		targetCount = 16
 		testID      = 1
 	)
 
-	server := newCheckpointTestServer(t, testID)
+	server := newCheckpointTestServer(t)
 
 	baseline := runtime.NumGoroutine()
 
@@ -321,9 +317,11 @@ func TestCheckpointReleasesEveryParticipant(t *testing.T) {
 // test: members used to be appended to a slice without deduplication, so a
 // single connection could satisfy a barrier sized for several agents.
 func TestCheckpointRejectsRepeatedJoinsFromOneConnection(t *testing.T) {
+	t.Parallel()
+
 	const testID = 2
 
-	server := newCheckpointTestServer(t, testID)
+	server := newCheckpointTestServer(t)
 
 	first := newAgent(t, server, testID)
 	for range 5 {
@@ -359,9 +357,11 @@ func TestCheckpointRejectsRepeatedJoinsFromOneConnection(t *testing.T) {
 // TestCheckpointRejectsInvalidRequests covers the CONC-4 validation: a missing
 // or non-positive target count used to release the barrier on the first join.
 func TestCheckpointRejectsInvalidRequests(t *testing.T) {
+	t.Parallel()
+
 	const testID = 3
 
-	server := newCheckpointTestServer(t, testID)
+	server := newCheckpointTestServer(t)
 
 	tests := map[string]map[string]any{
 		"missing target count":  {"identifier": "no-target"},
@@ -411,9 +411,11 @@ func waitForGoroutines(t *testing.T, limit int, timeout time.Duration) {
 // that had gone away, and every agent that sized a barrier from that count
 // sized it wrong.
 func TestConnectionCountDropsAfterDisconnect(t *testing.T) {
+	t.Parallel()
+
 	const testID = 20
 
-	server := newCheckpointTestServer(t, testID)
+	server := newCheckpointTestServer(t)
 
 	first := newAgent(t, server, testID)
 	second := newAgent(t, server, testID)
@@ -434,12 +436,14 @@ func TestConnectionCountDropsAfterDisconnect(t *testing.T) {
 // reaching the checkpoint left every other agent waiting for a count that
 // could never be reached, for as long as the CI job lasted.
 func TestCheckpointReleasesSurvivorsWhenParticipantDies(t *testing.T) {
+	t.Parallel()
+
 	const (
 		testID = 21
 		target = 3
 	)
 
-	server := newCheckpointTestServer(t, testID)
+	server := newCheckpointTestServer(t)
 
 	first := newAgent(t, server, testID)
 	second := newAgent(t, server, testID)
@@ -477,12 +481,14 @@ func TestCheckpointReleasesSurvivorsWhenParticipantDies(t *testing.T) {
 // that never arrives, and never disconnects either, must not hold the barrier
 // past the round's deadline.
 func TestCheckpointTimesOutStalledRound(t *testing.T) {
+	t.Parallel()
+
 	const (
 		testID = 22
 		target = 2
 	)
 
-	server := newCheckpointTestServer(t, testID)
+	server := newCheckpointTestServer(t)
 
 	lonely := newAgent(t, server, testID)
 	lonely.waitCheckpointWithin("stalled", target, 300*time.Millisecond)
@@ -509,13 +515,15 @@ func TestCheckpointTimesOutStalledRound(t *testing.T) {
 // was released immediately. A looping suite that reuses an identifier
 // therefore desynchronized silently from its second round onwards.
 func TestCheckpointRoundsAreReusable(t *testing.T) {
+	t.Parallel()
+
 	const (
 		testID = 23
 		rounds = 3
 		target = 2
 	)
 
-	server := newCheckpointTestServer(t, testID)
+	server := newCheckpointTestServer(t)
 
 	first := newAgent(t, server, testID)
 	second := newAgent(t, server, testID)

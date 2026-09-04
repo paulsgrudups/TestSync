@@ -11,8 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/paulsgrudups/testsync/api/auth"
-	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/internal/storagetest"
+	"github.com/paulsgrudups/testsync/internal/apptest"
 	"github.com/paulsgrudups/testsync/utils"
 )
 
@@ -20,18 +19,14 @@ import (
 const authTestID = 4242
 
 // newAuthTestServer starts a WebSocket server that authenticates through the
-// shared validator built from the given credentials.
+// given validator. It is the same validator type the HTTP server holds, so the
+// two paths cannot disagree about who is allowed in (SEC-1).
 func newAuthTestServer(t *testing.T, validator *auth.Validator) *httptest.Server {
 	t.Helper()
 
-	runs.DeleteTest(authTestID)
-	runs.SetDataStore(storagetest.NewStore(t))
+	application := apptest.WithValidator(t, apptest.Config(), validator)
 
-	previous := auth.Shared()
-	t.Cleanup(func() { auth.SetShared(previous) })
-	auth.SetShared(validator)
-
-	httpServer := httptest.NewServer(newWSRouter(&Server{Handler: NewCommandHandler(nil)}))
+	httpServer := httptest.NewServer(newWSRouter(newServer(application)))
 	t.Cleanup(httpServer.Close)
 
 	return httpServer
@@ -67,6 +62,8 @@ func dialAuth(t *testing.T, server *httptest.Server, query string, header http.H
 // same validator as the HTTP path decides, wrong credentials are rejected, and
 // the deprecated query-parameter fallback keeps working.
 func TestWebSocketAuthorization(t *testing.T) {
+	t.Parallel()
+
 	validator, err := auth.NewValidator(
 		utils.BasicCredentials{Username: "user", Password: "pass"},
 	)
@@ -143,6 +140,8 @@ func TestWebSocketAuthorization(t *testing.T) {
 // server whose validator was never installed must reject everyone rather than
 // serve everyone, which is what the old empty-credential branch did (SEC-1).
 func TestWebSocketAuthorizationWithoutValidator(t *testing.T) {
+	t.Parallel()
+
 	server := newAuthTestServer(t, nil)
 
 	if got := dialAuth(t, server, "", nil); got != http.StatusUnauthorized {
@@ -153,6 +152,8 @@ func TestWebSocketAuthorizationWithoutValidator(t *testing.T) {
 // TestWebSocketAuthorizationDisabled covers the explicit opt-out: with auth
 // mode "none" a credential-less client still connects.
 func TestWebSocketAuthorizationDisabled(t *testing.T) {
+	t.Parallel()
+
 	server := newAuthTestServer(t, auth.NewDisabledValidator())
 
 	if got := dialAuth(t, server, "", nil); got != http.StatusSwitchingProtocols {

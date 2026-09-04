@@ -27,15 +27,25 @@ type Janitor struct {
 	interval  time.Duration
 	retention time.Duration
 
+	// registry and svc are the two halves of a run the janitor reclaims: the
+	// in-memory aggregate and the stored payload. They are held explicitly so
+	// that a janitor sweeps the server it was built for, and a test can sweep
+	// its own registry without touching anyone else's (CODE-1).
+	registry *Registry
+	svc      *Service
+
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
 }
 
-// NewJanitor creates a janitor that sweeps every interval and reclaims runs
-// that have been idle for longer than retention. Values that are not positive
-// fall back to the defaults.
-func NewJanitor(interval, retention time.Duration) *Janitor {
+// NewJanitor creates a janitor that sweeps the given registry every interval
+// and reclaims runs that have been idle for longer than retention, together
+// with their data in svc's store. Interval and retention values that are not
+// positive fall back to the defaults.
+func NewJanitor(
+	interval, retention time.Duration, registry *Registry, svc *Service,
+) *Janitor {
 	if interval <= 0 {
 		interval = utils.DefaultCleanupInterval
 	}
@@ -44,7 +54,12 @@ func NewJanitor(interval, retention time.Duration) *Janitor {
 		retention = utils.DefaultRetention
 	}
 
-	return &Janitor{interval: interval, retention: retention}
+	return &Janitor{
+		interval:  interval,
+		retention: retention,
+		registry:  registry,
+		svc:       svc,
+	}
 }
 
 // Start runs the janitor until ctx is cancelled or [Janitor.Stop] is called.
@@ -114,7 +129,7 @@ func (j *Janitor) Sweep(now time.Time) {
 
 	keep := make([]int, 0)
 
-	RangeTests(func(testID int, t *Test) {
+	j.registry.Range(func(testID int, t *Test) {
 		if !t.Created.Before(limit) {
 			keep = append(keep, testID)
 			return
@@ -132,10 +147,10 @@ func (j *Janitor) Sweep(now time.Time) {
 		}
 
 		log.WithField("test_id", testID).Info("Deleting expired test")
-		DeleteTest(testID)
+		j.registry.Delete(testID)
 	})
 
-	if err := DeleteDataOlderThan(limit, keep); err != nil {
+	if err := j.svc.DeleteDataOlderThan(limit, keep); err != nil {
 		log.Errorf("Failed to delete old data: %s", err.Error())
 	}
 }

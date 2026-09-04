@@ -29,6 +29,8 @@ var (
 // any surviving plaintext comparison of credential material (SEC-2), which is
 // the finding's stated done-condition.
 func TestNoPlaintextCredentialComparison(t *testing.T) {
+	t.Parallel()
+
 	root := filepath.Join("..", "..")
 
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {

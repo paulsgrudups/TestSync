@@ -12,6 +12,8 @@ import (
 // panicking handler is answered with a 500 instead of unwinding into the
 // server's connection goroutine.
 func TestRouterRecoversHandlerPanic(t *testing.T) {
+	t.Parallel()
+
 	router := mux.NewRouter()
 	if err := registerMiddlewares(router); err != nil {
 		t.Fatalf("failed to register middlewares: %v", err)

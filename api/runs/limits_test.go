@@ -5,71 +5,63 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paulsgrudups/testsync/internal/storagetest"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
-// withLimits installs limits for one test and restores them afterwards.
-func withLimits(t *testing.T, limits Limits) {
-	t.Helper()
+// limitsWith returns the default limits with one field overridden.
+func limitsWith(apply func(*Limits)) Limits {
+	limits := DefaultLimits()
+	apply(&limits)
 
-	previous := CurrentLimits()
-	t.Cleanup(func() { SetLimits(previous) })
-
-	SetLimits(limits)
+	return limits
 }
 
 // TestMaxTestsRejectsNewRuns covers STAB-3: the registry grew by one entry per
 // test ID ever seen, so any client could exhaust the server's memory just by
 // counting upwards.
 func TestMaxTestsRejectsNewRuns(t *testing.T) {
-	AllTests = make(map[int]*Test)
+	t.Parallel()
 
-	limits := DefaultLimits()
-	limits.MaxTests = 2
-	withLimits(t, limits)
+	registry := NewRegistry(limitsWith(func(l *Limits) { l.MaxTests = 2 }))
 
 	for id := range 2 {
-		if _, err := EnsureTest(id, func() *Test { return &Test{Created: time.Now()} }); err != nil {
+		if _, err := registry.Ensure(id); err != nil {
 			t.Fatalf("run %d was refused below the limit: %v", id, err)
 		}
 	}
 
-	_, err := EnsureTest(99, func() *Test { return &Test{Created: time.Now()} })
-	if !errors.Is(err, ErrTestLimitReached) {
+	if _, err := registry.Ensure(99); !errors.Is(err, ErrTestLimitReached) {
 		t.Fatalf("expected ErrTestLimitReached, got %v", err)
 	}
 
-	if err := CanAdmitTest(99); !errors.Is(err, ErrTestLimitReached) {
-		t.Fatalf("expected CanAdmitTest to refuse a new run, got %v", err)
+	if err := registry.CanAdmit(99); !errors.Is(err, ErrTestLimitReached) {
+		t.Fatalf("expected CanAdmit to refuse a new run, got %v", err)
 	}
 
 	// A run that already exists is always admitted: the limit bounds how many
 	// runs exist, not how many agents may reach one.
-	if err := CanAdmitTest(0); err != nil {
+	if err := registry.CanAdmit(0); err != nil {
 		t.Fatalf("an existing run was refused: %v", err)
 	}
 
-	if _, err := EnsureTest(0, func() *Test { return &Test{} }); err != nil {
+	if _, err := registry.Ensure(0); err != nil {
 		t.Fatalf("an existing run was refused: %v", err)
 	}
 
-	if count := TestCount(); count != 2 {
+	if count := registry.Count(); count != 2 {
 		t.Fatalf("expected 2 runs, got %d", count)
 	}
 }
 
 // TestMaxConnectionsPerTestRejectsAgents covers the per-run connection cap.
 func TestMaxConnectionsPerTestRejectsAgents(t *testing.T) {
-	AllTests = make(map[int]*Test)
+	t.Parallel()
 
-	limits := DefaultLimits()
-	limits.MaxConnectionsPerTest = 2
-	withLimits(t, limits)
-
-	run := &Test{Created: time.Now()}
-	SetTest(1, run)
+	registry := NewRegistry(
+		limitsWith(func(l *Limits) { l.MaxConnectionsPerTest = 2 }),
+	)
+	run := newRun(t, registry, 1, time.Now())
 
 	for i := range 2 {
 		if _, err := run.AddConnection(wsutil.NewClient(nil)); err != nil {
@@ -105,14 +97,12 @@ func TestMaxConnectionsPerTestRejectsAgents(t *testing.T) {
 // cap. Checkpoints were created on demand and never pruned, so a suite that
 // invented an identifier per iteration grew the run without bound.
 func TestMaxCheckpointsPerTestRejectsNewIdentifiers(t *testing.T) {
-	AllTests = make(map[int]*Test)
+	t.Parallel()
 
-	limits := DefaultLimits()
-	limits.MaxCheckpointsPerTest = 2
-	withLimits(t, limits)
-
-	run := &Test{Created: time.Now()}
-	SetTest(1, run)
+	registry := NewRegistry(
+		limitsWith(func(l *Limits) { l.MaxCheckpointsPerTest = 2 }),
+	)
+	run := newRun(t, registry, 1, time.Now())
 
 	connID, err := run.AddConnection(wsutil.NewClient(nil))
 	if err != nil {
@@ -149,13 +139,11 @@ func TestMaxCheckpointsPerTestRejectsNewIdentifiers(t *testing.T) {
 // is the same number as the HTTP body cap and the WebSocket frame cap, so a
 // payload cannot be accepted on one path and refused on another.
 func TestMaxDataBytesRejectsOversizedPayloads(t *testing.T) {
-	AllTests = make(map[int]*Test)
+	t.Parallel()
 
-	limits := DefaultLimits()
-	limits.MaxDataBytes = 16
-	withLimits(t, limits)
-
-	service := NewService(storagetest.NewStore(t))
+	registry, service := newTestSetup(
+		t, limitsWith(func(l *Limits) { l.MaxDataBytes = 16 }),
+	)
 
 	oversized := make([]byte, 17)
 
@@ -172,7 +160,7 @@ func TestMaxDataBytesRejectsOversizedPayloads(t *testing.T) {
 		t.Fatalf("a refused payload was stored: %v", err)
 	}
 
-	if _, ok := GetTest(1); ok {
+	if _, ok := registry.Get(1); ok {
 		t.Fatal("a refused payload registered a run")
 	}
 
@@ -184,6 +172,8 @@ func TestMaxDataBytesRejectsOversizedPayloads(t *testing.T) {
 // TestLimitsFromConfig covers the configuration mapping: an omitted field
 // keeps its default, a configured one is honoured.
 func TestLimitsFromConfig(t *testing.T) {
+	t.Parallel()
+
 	limits := LimitsFromConfig(utils.LimitsConfig{MaxTests: 7})
 
 	if limits.MaxTests != 7 {
@@ -197,13 +187,13 @@ func TestLimitsFromConfig(t *testing.T) {
 	}
 }
 
-// TestCurrentLimitsDefaultsWithoutSetup covers the fail-safe: a process that
-// never installed limits is bounded by the defaults rather than unbounded.
-func TestCurrentLimitsDefaultsWithoutSetup(t *testing.T) {
-	previous := current.Swap(nil)
-	t.Cleanup(func() { current.Store(previous) })
+// TestLimitsFromEmptyConfigAreDefaults covers the fail-safe: a server whose
+// operator configured no limits at all is bounded by the defaults rather than
+// unbounded.
+func TestLimitsFromEmptyConfigAreDefaults(t *testing.T) {
+	t.Parallel()
 
-	if got := CurrentLimits(); got != DefaultLimits() {
+	if got := LimitsFromConfig(utils.LimitsConfig{}); got != DefaultLimits() {
 		t.Fatalf("expected the default limits, got %+v", got)
 	}
 }

@@ -9,22 +9,16 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// BasicAuthMiddleware validates requests using provided validator.
+// BasicAuthMiddleware validates requests using the provided validator.
+//
+// The validator is a parameter rather than a global resolved per request: a
+// router cannot be built without one, so there is no registration order in
+// which a route ends up unauthenticated (SEC-1). A nil validator denies every
+// request rather than opening the route.
 func BasicAuthMiddleware(v *Validator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			serveAuthorized(w, r, v, next)
-		})
-	}
-}
-
-// SharedMiddleware validates requests using the process-wide validator
-// installed by SetShared. The validator is resolved per request, so route
-// registration order can never leave a route unauthenticated (SEC-1).
-func SharedMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			serveAuthorized(w, r, Shared(), next)
 		})
 	}
 }

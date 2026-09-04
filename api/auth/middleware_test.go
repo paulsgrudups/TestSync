@@ -26,6 +26,8 @@ func okHandler() http.Handler {
 }
 
 func TestBasicAuthMiddleware_Unauthorized(t *testing.T) {
+	t.Parallel()
+
 	handler := BasicAuthMiddleware(newTestValidator(t))(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -38,6 +40,8 @@ func TestBasicAuthMiddleware_Unauthorized(t *testing.T) {
 }
 
 func TestBasicAuthMiddleware_Authorized(t *testing.T) {
+	t.Parallel()
+
 	handler := BasicAuthMiddleware(newTestValidator(t))(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -53,6 +57,8 @@ func TestBasicAuthMiddleware_Authorized(t *testing.T) {
 // TestBasicAuthMiddleware_WrongCredentials covers the HTTP half of SEC-1/SEC-2:
 // neither half of the credential may be guessed independently.
 func TestBasicAuthMiddleware_WrongCredentials(t *testing.T) {
+	t.Parallel()
+
 	handler := BasicAuthMiddleware(newTestValidator(t))(okHandler())
 
 	cases := []struct {
@@ -82,6 +88,8 @@ func TestBasicAuthMiddleware_WrongCredentials(t *testing.T) {
 // TestBasicAuthMiddleware_NilValidator covers the fail-closed default: a route
 // wired up before credentials exist denies instead of serving everyone (SEC-1).
 func TestBasicAuthMiddleware_NilValidator(t *testing.T) {
+	t.Parallel()
+
 	handler := BasicAuthMiddleware(nil)(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -96,6 +104,8 @@ func TestBasicAuthMiddleware_NilValidator(t *testing.T) {
 
 // TestBasicAuthMiddleware_Disabled covers the explicit opt-out.
 func TestBasicAuthMiddleware_Disabled(t *testing.T) {
+	t.Parallel()
+
 	handler := BasicAuthMiddleware(NewDisabledValidator())(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -107,32 +117,19 @@ func TestBasicAuthMiddleware_Disabled(t *testing.T) {
 	}
 }
 
-// TestSharedMiddleware checks that the middleware resolves the shared validator
-// per request, so registration order cannot leave a route open (SEC-1).
-func TestSharedMiddleware(t *testing.T) {
-	previous := Shared()
-	t.Cleanup(func() { SetShared(previous) })
+// TestBasicAuthMiddleware_Configured covers the ordinary path: the validator
+// the router was built with is the one every request is checked against.
+func TestBasicAuthMiddleware_Configured(t *testing.T) {
+	t.Parallel()
 
-	SetShared(nil)
+	handler := BasicAuthMiddleware(newTestValidator(t))(okHandler())
 
-	handler := SharedMiddleware()(okHandler())
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.SetBasicAuth("user", "pass")
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
-	}
-
-	SetShared(newTestValidator(t))
-
-	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+		t.Fatalf("expected status %d for a request with no credentials, got %d",
+			http.StatusUnauthorized, rec.Code)
 	}
 
 	authorized := httptest.NewRequest(http.MethodGet, "/", nil)

@@ -76,26 +76,34 @@ type runDetailResponse struct {
 	Checkpoints []checkpointView `json:"checkpoints"`
 }
 
-// RegisterRoutes registers the monitoring API and the UI page.
-//
-// Both sit behind the one shared validator, resolved per request, so they are
-// authenticated exactly like every other route and cannot be registered into
-// an open state (SEC-1).
-func RegisterRoutes(r *mux.Router) {
-	apiRouter := r.PathPrefix(APIPrefix).Subrouter().StrictSlash(false)
-	apiRouter.Use(challengeUnauthorized, auth.SharedMiddleware())
+// API serves the monitoring endpoints for one registry.
+type API struct {
+	registry *runs.Registry
+}
 
-	apiRouter.HandleFunc("/runs", listRunsHandler).Methods(http.MethodGet)
-	apiRouter.HandleFunc(`/runs/{testID:\d+}`, runDetailHandler).
+// RegisterRoutes registers the monitoring API and the UI page for the given
+// registry.
+//
+// Both sit behind the same validator as every other route, passed in rather
+// than read from package state, so they cannot be registered into an open
+// state (SEC-1).
+func RegisterRoutes(r *mux.Router, registry *runs.Registry, validator *auth.Validator) {
+	api := &API{registry: registry}
+
+	apiRouter := r.PathPrefix(APIPrefix).Subrouter().StrictSlash(false)
+	apiRouter.Use(challengeUnauthorized, auth.BasicAuthMiddleware(validator))
+
+	apiRouter.HandleFunc("/runs", api.listRunsHandler).Methods(http.MethodGet)
+	apiRouter.HandleFunc(`/runs/{testID:\d+}`, api.runDetailHandler).
 		Methods(http.MethodGet)
 
-	registerUIRoutes(r)
+	registerUIRoutes(r, validator)
 }
 
 // listRunsHandler answers with every known run and enough state to tell at a
 // glance which of them is stuck on a barrier.
-func listRunsHandler(w http.ResponseWriter, _ *http.Request) {
-	states := runs.AllTestStates()
+func (a *API) listRunsHandler(w http.ResponseWriter, _ *http.Request) {
+	states := a.registry.States()
 
 	now := time.Now().UTC()
 	body := runListResponse{
@@ -112,13 +120,13 @@ func listRunsHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 // runDetailHandler answers with the agents and checkpoints of a single run.
-func runDetailHandler(w http.ResponseWriter, r *http.Request) {
+func (a *API) runDetailHandler(w http.ResponseWriter, r *http.Request) {
 	testID, err := runs.GetPathID(w, r, "testID")
 	if err != nil {
 		return
 	}
 
-	test, ok := runs.GetTest(testID)
+	test, ok := a.registry.Get(testID)
 	if !ok {
 		utils.HTTPError(w, "Could not find test run", http.StatusNotFound)
 		return

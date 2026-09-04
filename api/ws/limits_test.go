@@ -4,24 +4,33 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 
-	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/internal/storagetest"
+	"github.com/paulsgrudups/testsync/api/auth"
+	"github.com/paulsgrudups/testsync/internal/app"
+	"github.com/paulsgrudups/testsync/internal/apptest"
+	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
-// withLimits installs limits for one test and restores them afterwards.
-func withLimits(t *testing.T, limits runs.Limits) {
+// newLimitedServer starts a WebSocket server whose limits are the operator's,
+// so a limit test exercises the same path a configured server takes.
+func newLimitedServer(
+	t *testing.T, limits utils.LimitsConfig,
+) (*httptest.Server, *app.App) {
 	t.Helper()
 
-	previous := runs.CurrentLimits()
-	t.Cleanup(func() { runs.SetLimits(previous) })
+	conf := apptest.Config()
+	conf.Limits = limits
+	conf.Auth.Mode = utils.AuthModeNone
 
-	runs.SetLimits(limits)
+	application := apptest.WithValidator(t, conf, auth.NewDisabledValidator())
+
+	return newLifecycleServer(t, newServer(application)), application
 }
 
 // readRejection reads the next message and decodes it as an "error" reply.
@@ -59,22 +68,20 @@ func readRejection(t *testing.T, conn *websocket.Conn) ErrorContent {
 // was turned away and may retry, rather than seeing an abnormal closure it
 // cannot tell from a crash.
 func TestConnectionLimitClosesWithTryAgainLater(t *testing.T) {
+	t.Parallel()
+
 	const testID = 40
 
-	limits := runs.DefaultLimits()
-	limits.MaxConnectionsPerTest = 1
-	withLimits(t, limits)
-
-	runs.SetDataStore(storagetest.NewStore(t))
-
-	server := newLifecycleServer(t, &Server{Handler: NewCommandHandler(nil)}, testID)
+	server, application := newLimitedServer(
+		t, utils.LimitsConfig{MaxConnectionsPerTest: 1},
+	)
 	path := fmt.Sprintf("/register/%d", testID)
 
 	first := dialRaw(t, server, path)
 
 	// The first agent has to be registered before the second dials, otherwise
 	// the second may legitimately take the only slot.
-	waitForConnections(t, testID, 1)
+	waitForConnections(t, application, testID, 1)
 
 	second := dialRaw(t, server, path)
 
@@ -108,15 +115,11 @@ func TestConnectionLimitClosesWithTryAgainLater(t *testing.T) {
 // limits.max_checkpoints_per_test: an "error" reply naming the limit, on the
 // connection that asked for it, with the connection left usable.
 func TestCheckpointLimitReportsRejection(t *testing.T) {
+	t.Parallel()
+
 	const testID = 41
 
-	limits := runs.DefaultLimits()
-	limits.MaxCheckpointsPerTest = 1
-	withLimits(t, limits)
-
-	runs.SetDataStore(storagetest.NewStore(t))
-
-	server := newLifecycleServer(t, &Server{Handler: NewCommandHandler(nil)}, testID)
+	server, _ := newLimitedServer(t, utils.LimitsConfig{MaxCheckpointsPerTest: 1})
 	conn := dialRaw(t, server, fmt.Sprintf("/register/%d", testID))
 
 	join := func(identifier string) error {
@@ -153,15 +156,11 @@ func TestCheckpointLimitReportsRejection(t *testing.T) {
 // TestUpdateDataRejectsOversizedPayload covers the documented rejection for
 // limits.max_data_bytes on the WebSocket path.
 func TestUpdateDataRejectsOversizedPayload(t *testing.T) {
+	t.Parallel()
+
 	const testID = 42
 
-	limits := runs.DefaultLimits()
-	limits.MaxDataBytes = 64
-	withLimits(t, limits)
-
-	runs.SetDataStore(storagetest.NewStore(t))
-
-	server := newLifecycleServer(t, &Server{Handler: NewCommandHandler(nil)}, testID)
+	server, application := newLimitedServer(t, utils.LimitsConfig{MaxDataBytes: 64})
 	conn := dialRaw(t, server, fmt.Sprintf("/register/%d", testID))
 
 	oversized := map[string]string{"data": string(make([]byte, 128))}
@@ -174,7 +173,7 @@ func TestUpdateDataRejectsOversizedPayload(t *testing.T) {
 		t.Fatalf("expected %q, got %+v", CodePayloadTooLarge, content)
 	}
 
-	if _, err := runs.NewService(nil).ReadTestData(testID); err == nil {
+	if _, err := application.Service.ReadTestData(testID); err == nil {
 		t.Fatal("a refused payload was stored")
 	}
 }
@@ -184,19 +183,22 @@ func TestUpdateDataRejectsOversizedPayload(t *testing.T) {
 // a deploy is distinguishable from a crash. [http.Server.Shutdown] does not
 // track hijacked connections, so nothing used to reach the agents at all.
 func TestShutdownClosesAgentsWithServiceRestart(t *testing.T) {
+	t.Parallel()
+
 	const testID = 43
 
-	runs.SetDataStore(storagetest.NewStore(t))
-
-	server := newLifecycleServer(t, &Server{Handler: NewCommandHandler(nil)}, testID)
+	server, application := newLimitedServer(t, utils.LimitsConfig{})
 	conn := dialRaw(t, server, fmt.Sprintf("/register/%d", testID))
 
-	waitForConnections(t, testID, 1)
+	waitForConnections(t, application, testID, 1)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	if closed := runs.CloseAllConnections(ctx, websocket.CloseServiceRestart, "bye"); closed != 1 {
+	closed := application.Registry.CloseAllConnections(
+		ctx, websocket.CloseServiceRestart, "bye",
+	)
+	if closed != 1 {
 		t.Fatalf("expected 1 connection to be closed, got %d", closed)
 	}
 
@@ -210,30 +212,5 @@ func TestShutdownClosesAgentsWithServiceRestart(t *testing.T) {
 			"expected close %d (service restart), got %v",
 			websocket.CloseServiceRestart, err,
 		)
-	}
-}
-
-// waitForConnections polls until a run has the expected number of agents.
-func waitForConnections(t *testing.T, testID, want int) {
-	t.Helper()
-
-	deadline := time.Now().Add(5 * time.Second)
-
-	for {
-		run, ok := runs.GetTest(testID)
-		if ok && run.ConnectionCount() == want {
-			return
-		}
-
-		if time.Now().After(deadline) {
-			count := 0
-			if ok {
-				count = run.ConnectionCount()
-			}
-
-			t.Fatalf("expected %d connections on test %d, got %d", want, testID, count)
-		}
-
-		time.Sleep(10 * time.Millisecond)
 	}
 }

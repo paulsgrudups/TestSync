@@ -4,21 +4,28 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/paulsgrudups/testsync/internal/apptest"
 )
 
-// TestHandleRoutesSpawnsNoGoroutines covers STAB-5: registering routes must
-// have no side effects. Route registration used to start a cleanup ticker that
-// could never be stopped, so every call leaked a goroutine and calling
-// HandleRoutes more than once was quietly unsafe.
-func TestHandleRoutesSpawnsNoGoroutines(t *testing.T) {
+// TestNewRouterSpawnsNoGoroutines covers STAB-5: registering routes must have
+// no side effects. Route registration used to start a cleanup ticker that
+// could never be stopped, so every call leaked a goroutine and building the
+// router more than once was quietly unsafe.
+//
+// Not parallel: it counts goroutines, which only means anything while nothing
+// else in this package is starting any.
+func TestNewRouterSpawnsNoGoroutines(t *testing.T) {
 	const calls = 100
+
+	application := apptest.NewDefault(t)
 
 	settle()
 
 	before := runtime.NumGoroutine()
 
 	for range calls {
-		if _, err := HandleRoutes(); err != nil {
+		if _, err := NewRouter(application); err != nil {
 			t.Fatalf("failed to create router: %v", err)
 		}
 	}
@@ -27,7 +34,7 @@ func TestHandleRoutesSpawnsNoGoroutines(t *testing.T) {
 
 	if leaked := runtime.NumGoroutine() - before; leaked > 0 {
 		t.Fatalf(
-			"%d HandleRoutes calls leaked %d goroutines", calls, leaked,
+			"%d NewRouter calls leaked %d goroutines", calls, leaked,
 		)
 	}
 }

@@ -70,7 +70,7 @@ func (t *Test) ensureCheckpoint(identifier string) (*checkpoint, error) {
 		return cp, nil
 	}
 
-	if limit := CurrentLimits().MaxCheckpointsPerTest; limit > 0 && len(t.checkPoints) >= limit {
+	if limit := t.limits.MaxCheckpointsPerTest; limit > 0 && len(t.checkPoints) >= limit {
 		return nil, fmt.Errorf(
 			"%w: %d checkpoints exist on this run, which is the configured maximum",
 			ErrCheckpointLimitReached, len(t.checkPoints),

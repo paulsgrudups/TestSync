@@ -7,35 +7,28 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/internal/storagetest"
+	"github.com/paulsgrudups/testsync/internal/app"
+	"github.com/paulsgrudups/testsync/internal/apptest"
 	"github.com/paulsgrudups/testsync/utils"
 )
 
-// withLimits installs limits for one test and restores them afterwards.
-func withLimits(t *testing.T, limits runs.Limits) {
+// newLimitedApp builds an application whose limits are the operator's, so a
+// limit test exercises the same path a configured server takes.
+func newLimitedApp(t *testing.T, limits utils.LimitsConfig) *app.App {
 	t.Helper()
 
-	previous := runs.CurrentLimits()
-	t.Cleanup(func() { runs.SetLimits(previous) })
+	conf := apptest.Config()
+	conf.Limits = limits
 
-	runs.SetLimits(limits)
+	return apptest.New(t, conf)
 }
 
-// newLimitedRouter builds the real router over a fresh registry and store.
-func newLimitedRouter(t *testing.T) http.Handler {
+// newLimitedRouter builds the real router over that application.
+func newLimitedRouter(t *testing.T, application *app.App) http.Handler {
 	t.Helper()
 
-	installTestCredentials(t)
-
-	runs.AllTests = make(map[int]*runs.Test)
-	t.Cleanup(func() { runs.AllTests = make(map[int]*runs.Test) })
-
-	runs.SetDataStore(storagetest.NewStore(t))
-
-	handler, err := HandleRoutes()
+	handler, err := NewRouter(application)
 	if err != nil {
 		t.Fatalf("failed to create router: %v", err)
 	}
@@ -47,11 +40,11 @@ func newLimitedRouter(t *testing.T) http.Handler {
 // limits.max_data_bytes on the HTTP path: 413, with the standard JSON error
 // body, and nothing stored.
 func TestPostRejectsOversizedBody(t *testing.T) {
-	limits := runs.DefaultLimits()
-	limits.MaxDataBytes = 16
-	withLimits(t, limits)
+	t.Parallel()
 
-	handler := newLimitedRouter(t)
+	handler := newLimitedRouter(
+		t, newLimitedApp(t, utils.LimitsConfig{MaxDataBytes: 16}),
+	)
 
 	req := httptest.NewRequest(
 		http.MethodPost, "/tests/1", bytes.NewReader(make([]byte, 17)),
@@ -84,13 +77,14 @@ func TestPostRejectsOversizedBody(t *testing.T) {
 // limits.max_tests on the HTTP path: 503, so a client can tell "the server is
 // full" from "your request was wrong".
 func TestPostRejectsNewRunsPastTheLimit(t *testing.T) {
-	limits := runs.DefaultLimits()
-	limits.MaxTests = 1
-	withLimits(t, limits)
+	t.Parallel()
 
-	handler := newLimitedRouter(t)
+	application := newLimitedApp(t, utils.LimitsConfig{MaxTests: 1})
+	handler := newLimitedRouter(t, application)
 
-	runs.SetTest(1, &runs.Test{Created: time.Now()})
+	if _, err := application.Registry.Ensure(1); err != nil {
+		t.Fatalf("failed to register the first run: %v", err)
+	}
 
 	req := httptest.NewRequest(
 		http.MethodPost, "/tests/2", strings.NewReader("payload"),
@@ -108,7 +102,7 @@ func TestPostRejectsNewRunsPastTheLimit(t *testing.T) {
 
 	assertErrorBody(t, rec, http.StatusServiceUnavailable)
 
-	if _, ok := runs.GetTest(2); ok {
+	if _, ok := application.Registry.Get(2); ok {
 		t.Fatal("a refused run was registered anyway")
 	}
 }

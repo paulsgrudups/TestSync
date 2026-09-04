@@ -16,9 +16,9 @@ import (
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
-// newTestRouter builds a router carrying only the monitoring routes, with the
-// shared validator pointed at a known credential (SEC-1).
-func newTestRouter(t *testing.T) http.Handler {
+// newTestRouter builds a router carrying only the monitoring routes, over a
+// registry and a validator belonging to this test alone (SEC-1, TEST-2).
+func newTestRouter(t *testing.T) (http.Handler, *runs.Registry) {
 	t.Helper()
 
 	validator, err := auth.NewValidator(
@@ -28,18 +28,12 @@ func newTestRouter(t *testing.T) http.Handler {
 		t.Fatalf("failed to create validator: %v", err)
 	}
 
-	previous := auth.Shared()
-	t.Cleanup(func() { auth.SetShared(previous) })
-	auth.SetShared(validator)
-
-	previousTests := runs.AllTests
-	t.Cleanup(func() { runs.AllTests = previousTests })
-	runs.AllTests = make(map[int]*runs.Test)
+	registry := runs.NewRegistry(runs.DefaultLimits())
 
 	router := mux.NewRouter().StrictSlash(false)
-	RegisterRoutes(router)
+	RegisterRoutes(router, registry, validator)
 
-	return router
+	return router, registry
 }
 
 // get performs an authenticated GET against the monitoring routes.
@@ -72,7 +66,9 @@ func decode(t *testing.T, rec *httptest.ResponseRecorder, out any) {
 // API and the page itself are unreachable without credentials, and the 401
 // carries a challenge so that a browser can ask for them.
 func TestMonitorRoutesRequireCredentials(t *testing.T) {
-	handler := newTestRouter(t)
+	t.Parallel()
+
+	handler, _ := newTestRouter(t)
 
 	paths := []string{
 		"/api/v1/runs",
@@ -102,7 +98,9 @@ func TestMonitorRoutesRequireCredentials(t *testing.T) {
 // TestMonitorRoutesRejectBadCredentials makes sure the monitoring routes go
 // through the same validator as everything else rather than a second path.
 func TestMonitorRoutesRejectBadCredentials(t *testing.T) {
-	handler := newTestRouter(t)
+	t.Parallel()
+
+	handler, _ := newTestRouter(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
 	req.SetBasicAuth("user", "wrong")
@@ -118,7 +116,9 @@ func TestMonitorRoutesRejectBadCredentials(t *testing.T) {
 // TestListRunsEmpty covers the state an operator sees most often on a quiet
 // server: no runs at all. The list must still be an array, never null.
 func TestListRunsEmpty(t *testing.T) {
-	handler := newTestRouter(t)
+	t.Parallel()
+
+	handler, _ := newTestRouter(t)
 
 	rec := get(t, handler, "/api/v1/runs")
 
@@ -154,13 +154,15 @@ func TestListRunsEmpty(t *testing.T) {
 // TestListRunsShape drives the shape an operator's page depends on: a run that
 // is stuck on a barrier reports as waiting, a released one does not.
 func TestListRunsShape(t *testing.T) {
-	handler := newTestRouter(t)
+	t.Parallel()
 
-	waiting, waitingIDs := newRun(t, 4242, 3)
+	handler, registry := newTestRouter(t)
+
+	waiting, waitingIDs := newRun(t, registry, 4242, 3)
 	joinCheckpoint(t, waiting, "login-barrier", 3, waitingIDs[0])
 	joinCheckpoint(t, waiting, "login-barrier", 3, waitingIDs[1])
 
-	released, releasedIDs := newRun(t, 17, 1)
+	released, releasedIDs := newRun(t, registry, 17, 1)
 	joinCheckpoint(t, released, "warmup", 1, releasedIDs[0])
 
 	rec := get(t, handler, "/api/v1/runs")
@@ -202,9 +204,11 @@ func TestListRunsShape(t *testing.T) {
 // TestRunDetailShape checks the per-run view, including the counts the page
 // renders the progress bar from.
 func TestRunDetailShape(t *testing.T) {
-	handler := newTestRouter(t)
+	t.Parallel()
 
-	run, ids := newRun(t, 900, 3)
+	handler, registry := newTestRouter(t)
+
+	run, ids := newRun(t, registry, 900, 3)
 	run.SetData([]byte("secret-payload"))
 	joinCheckpoint(t, run, "stage-2", 3, ids[0])
 	joinCheckpoint(t, run, "stage-2", 3, ids[2])
@@ -283,7 +287,9 @@ func TestRunDetailShape(t *testing.T) {
 // TestRunDetailNotFound covers a run ID that the server has never seen, which
 // is what a stale bookmark looks like.
 func TestRunDetailNotFound(t *testing.T) {
-	handler := newTestRouter(t)
+	t.Parallel()
+
+	handler, _ := newTestRouter(t)
 
 	rec := get(t, handler, "/api/v1/runs/321")
 
@@ -295,9 +301,11 @@ func TestRunDetailNotFound(t *testing.T) {
 // TestMonitorRoutesAreReadOnly makes sure no write verb was registered by
 // accident: the monitor may never mutate a run.
 func TestMonitorRoutesAreReadOnly(t *testing.T) {
-	handler := newTestRouter(t)
+	t.Parallel()
 
-	newRun(t, 55, 1)
+	handler, registry := newTestRouter(t)
+
+	newRun(t, registry, 55, 1)
 
 	methods := []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
 
@@ -319,7 +327,9 @@ func TestMonitorRoutesAreReadOnly(t *testing.T) {
 // TestUIPageIsServed covers the embedded page: it is served from the binary,
 // references only same-origin assets and carries a restrictive policy.
 func TestUIPageIsServed(t *testing.T) {
-	handler := newTestRouter(t)
+	t.Parallel()
+
+	handler, _ := newTestRouter(t)
 
 	rec := get(t, handler, "/ui")
 
@@ -379,12 +389,12 @@ func joinCheckpoint(
 
 // newRun registers a run with the requested number of attached connections.
 // The connections are never written to, so they need no live socket.
-func newRun(t *testing.T, testID, connections int) (*runs.Test, []runs.ConnID) {
+func newRun(
+	t *testing.T, registry *runs.Registry, testID, connections int,
+) (*runs.Test, []runs.ConnID) {
 	t.Helper()
 
-	run, err := runs.EnsureTest(testID, func() *runs.Test {
-		return &runs.Test{Created: time.Now().UTC()}
-	})
+	run, err := registry.Ensure(testID)
 	if err != nil {
 		t.Fatalf("failed to register run: %v", err)
 	}

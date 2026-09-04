@@ -18,8 +18,12 @@ import (
 // have silently renamed every connection after it (CONC-5).
 type ConnID uint64
 
-// nextConnID mints connection identifiers. It is process-wide rather than
-// per-test so that an ID identifies a connection on its own in a log line.
+// nextConnID mints connection identifiers. It is the one piece of package
+// state CODE-1 deliberately left in place: making it per-registry would let
+// two servers in one process mint the same ID, and the point of a ConnID is
+// that it identifies a connection on its own in a log line. It is an atomic
+// counter with no configuration in it, so it carries none of the ordering
+// hazards the other globals did.
 var nextConnID atomic.Uint64
 
 // AddConnection registers a connection and returns the ID that identifies it
@@ -36,7 +40,7 @@ func (t *Test) AddConnection(conn *wsutil.Client) (ConnID, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if limit := CurrentLimits().MaxConnectionsPerTest; limit > 0 && len(t.connections) >= limit {
+	if limit := t.limits.MaxConnectionsPerTest; limit > 0 && len(t.connections) >= limit {
 		return 0, fmt.Errorf(
 			"%w: %d agents are attached, which is the configured maximum",
 			ErrConnectionLimitReached, len(t.connections),
@@ -128,10 +132,10 @@ func (t *Test) GetConnectionsSnapshot() []*wsutil.Client {
 // sees an abnormal closure (STAB-6).
 //
 // It returns how many connections were closed.
-func CloseAllConnections(ctx context.Context, code int, reason string) int {
+func (reg *Registry) CloseAllConnections(ctx context.Context, code int, reason string) int {
 	clients := make([]*wsutil.Client, 0)
 
-	RangeTests(func(_ int, t *Test) {
+	reg.Range(func(_ int, t *Test) {
 		clients = append(clients, t.GetConnectionsSnapshot()...)
 	})
 

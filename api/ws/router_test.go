@@ -9,18 +9,13 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/internal/storagetest"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
 func TestWebSocketCommands(t *testing.T) {
-	// DeleteTest holds the registry lock, unlike replacing runs.AllTests
-	// wholesale, which races the connection goroutines that read it (CONC-12).
-	runs.DeleteTest(1)
-	runs.SetDataStore(storagetest.NewStore(t))
+	t.Parallel()
 
-	server := &Server{Handler: NewCommandHandler(nil)}
+	server := newInsecureServer(t)
 	httpServer := httptest.NewServer(newWSRouter(server))
 	defer httpServer.Close()
 

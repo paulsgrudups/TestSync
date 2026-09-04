@@ -10,6 +10,8 @@ import (
 // TestNewValidatorRequiresCredentials covers SEC-1: empty credentials used to
 // authenticate every caller, and must now be refused outright.
 func TestNewValidatorRequiresCredentials(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]utils.BasicCredentials{
 		"both empty":     {Username: "", Password: ""},
 		"empty username": {Username: "", Password: "pass"},
@@ -32,6 +34,8 @@ func TestNewValidatorRequiresCredentials(t *testing.T) {
 
 // TestValidatorValidate checks that only the exact credentials are accepted.
 func TestValidatorValidate(t *testing.T) {
+	t.Parallel()
+
 	v, err := NewValidator(utils.BasicCredentials{Username: "user", Password: "pass"})
 	if err != nil {
 		t.Fatalf("failed to create validator: %v", err)
@@ -63,6 +67,8 @@ func TestValidatorValidate(t *testing.T) {
 // TestNilValidatorDeniesEverything covers the fail-closed default: a server
 // that never installed a validator must not serve anybody.
 func TestNilValidatorDeniesEverything(t *testing.T) {
+	t.Parallel()
+
 	var v *Validator
 
 	if v.Disabled() {
@@ -76,6 +82,8 @@ func TestNilValidatorDeniesEverything(t *testing.T) {
 
 // TestDisabledValidator covers the explicit opt-out.
 func TestDisabledValidator(t *testing.T) {
+	t.Parallel()
+
 	v := NewDisabledValidator()
 
 	if !v.Disabled() {
@@ -89,6 +97,8 @@ func TestDisabledValidator(t *testing.T) {
 
 // TestNewFromConfig covers how configuration maps onto validators.
 func TestNewFromConfig(t *testing.T) {
+	t.Parallel()
+
 	creds := utils.BasicCredentials{Username: "user", Password: "pass"}
 
 	t.Run("default mode requires credentials", func(t *testing.T) {
@@ -136,28 +146,4 @@ func TestNewFromConfig(t *testing.T) {
 			t.Fatalf("expected ErrUnknownAuthMode, got %v", err)
 		}
 	})
-}
-
-// TestSharedValidator covers the single validator both servers authenticate
-// through (SEC-1).
-func TestSharedValidator(t *testing.T) {
-	previous := Shared()
-	t.Cleanup(func() { SetShared(previous) })
-
-	SetShared(nil)
-
-	if Shared().Validate("user", "pass") {
-		t.Fatal("an uninstalled shared validator authenticated a caller")
-	}
-
-	v, err := NewValidator(utils.BasicCredentials{Username: "user", Password: "pass"})
-	if err != nil {
-		t.Fatalf("failed to create validator: %v", err)
-	}
-
-	SetShared(v)
-
-	if !Shared().Validate("user", "pass") {
-		t.Fatal("the shared validator rejected the configured credentials")
-	}
 }

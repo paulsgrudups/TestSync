@@ -19,6 +19,7 @@ import (
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/api/ws"
+	"github.com/paulsgrudups/testsync/internal/app"
 	"github.com/paulsgrudups/testsync/storage"
 	"github.com/paulsgrudups/testsync/utils"
 
@@ -154,7 +155,8 @@ func setupLogging(conf utils.LogConfig) error {
 // serve builds the process and runs it until a signal arrives or a server
 // fails to listen.
 func serve(conf utils.Config) error {
-	if err := setupAuth(conf, *insecureNoAuth); err != nil {
+	validator, err := setupAuth(conf, *insecureNoAuth)
+	if err != nil {
 		return authError(err)
 	}
 
@@ -174,10 +176,12 @@ func serve(conf utils.Config) error {
 
 	log.Infof("Using sqlite data store at %q", store.Path())
 
-	runs.SetDataStore(store)
-	runs.SetLimits(runs.LimitsFromConfig(conf.Limits))
+	// One explicit construction point. Nothing below reads process-wide state,
+	// so the order of these lines cannot change how the server behaves
+	// (CODE-1).
+	application := app.New(conf, store, validator)
 
-	handler, err := api.HandleRoutes()
+	handler, err := api.NewRouter(application)
 	if err != nil {
 		return fmt.Errorf("could not build the HTTP routes: %w", err)
 	}
@@ -186,6 +190,7 @@ func serve(conf utils.Config) error {
 	// configured and stopped (STAB-5).
 	janitor := runs.NewJanitor(
 		conf.Cleanup.Interval.Duration(), conf.Cleanup.Retention.Duration(),
+		application.Registry, application.Service,
 	)
 
 	janitorCtx, stopJanitor := context.WithCancel(context.Background())
@@ -193,7 +198,7 @@ func serve(conf utils.Config) error {
 
 	janitor.Start(janitorCtx)
 
-	wsServer := ws.StartWebSocketServer(conf.WSPort)
+	wsServer := ws.StartWebSocketServer(application)
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", conf.HTTPPort),
@@ -219,7 +224,7 @@ func serve(conf utils.Config) error {
 	case listenErr = <-wsServer.ListenErr():
 	}
 
-	if err := shutdown(server, wsServer, janitor, store); err != nil && listenErr == nil {
+	if err := shutdown(application, server, wsServer, janitor); err != nil && listenErr == nil {
 		listenErr = err
 	}
 
@@ -261,7 +266,7 @@ func listen(server *http.Server, port int) <-chan error {
 // closed first, so requests in flight during a restart failed with
 // "sql: database is closed" and looked like flaky tests.
 func shutdown(
-	server *http.Server, wsServer *ws.Server, janitor *runs.Janitor, store *storage.SQLiteStore,
+	a *app.App, server *http.Server, wsServer *ws.Server, janitor *runs.Janitor,
 ) error {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
@@ -285,7 +290,7 @@ func shutdown(
 		}
 	}
 
-	closed := runs.CloseAllConnections(
+	closed := a.Registry.CloseAllConnections(
 		ctx, websocket.CloseServiceRestart, "server shutting down",
 	)
 	if closed > 0 {
@@ -294,7 +299,7 @@ func shutdown(
 
 	janitor.Stop()
 
-	if err := store.Close(); err != nil {
+	if err := a.Store.Close(); err != nil {
 		log.Errorf("Failed to close data store: %s", err.Error())
 
 		if failure == nil {
@@ -305,10 +310,10 @@ func shutdown(
 	return failure
 }
 
-// setupAuth resolves the process-wide credential validator and installs it for
-// both the HTTP and the WebSocket server. Authentication is required unless it
+// setupAuth builds the one credential validator both the HTTP and the
+// WebSocket server authenticate through. Authentication is required unless it
 // is explicitly disabled, in which case every startup says so loudly (SEC-1).
-func setupAuth(conf utils.Config, insecure bool) error {
+func setupAuth(conf utils.Config, insecure bool) (*auth.Validator, error) {
 	authConf := conf.Auth
 	if insecure {
 		authConf.Mode = utils.AuthModeNone
@@ -316,7 +321,7 @@ func setupAuth(conf utils.Config, insecure bool) error {
 
 	validator, err := auth.NewFromConfig(authConf, conf.SyncClient)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if validator.Disabled() {
@@ -328,9 +333,7 @@ func setupAuth(conf utils.Config, insecure bool) error {
 		log.Warn("****************************************************************")
 	}
 
-	auth.SetShared(validator)
-
-	return nil
+	return validator, nil
 }
 
 // authError explains an unusable authentication configuration. The first line

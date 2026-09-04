@@ -10,7 +10,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/paulsgrudups/testsync/api/auth"
-	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
 
@@ -34,8 +33,8 @@ const rejectFlushWait = 2 * time.Second
 // limits.max_data_bytes that bounds an HTTP request body and a stored payload,
 // so the three caps cannot drift apart. An oversized frame is rejected from
 // its header, before its payload is read or allocated.
-func maxMessageBytes() int64 {
-	return runs.CurrentLimits().MaxDataBytes + envelopeAllowance
+func (s *Server) maxMessageBytes() int64 {
+	return s.app.Registry.Limits().MaxDataBytes + envelopeAllowance
 }
 
 var (
@@ -81,7 +80,7 @@ func (s *Server) register(r *mux.Router) {
 }
 
 func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
-	if !isUserAuthorized(w, r) {
+	if !isUserAuthorized(w, r, s.app.Auth) {
 		return
 	}
 
@@ -99,7 +98,7 @@ func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
 	// A server that is already holding its maximum number of runs says so with
 	// an HTTP status, before the socket is upgraded and an error can only be
 	// delivered as a close frame (STAB-3).
-	if admitErr := runs.CanAdmitTest(testID); admitErr != nil {
+	if admitErr := s.app.Registry.CanAdmit(testID); admitErr != nil {
 		log.Warnf("Rejecting WebSocket registration: %s", admitErr.Error())
 		utils.HTTPError(
 			w,
@@ -149,7 +148,7 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 	// read limit rejects an oversized frame from its header (STAB-2). The
 	// ReadTimeout on the WS http.Server does not apply to an upgraded
 	// connection and provides none of this.
-	conn.SetReadLimit(maxMessageBytes())
+	conn.SetReadLimit(s.maxMessageBytes())
 
 	if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 		log.Errorf("Failed to set read deadline: %s", err.Error())
@@ -160,9 +159,7 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	r, err := runs.EnsureTest(testID, func() *runs.Test {
-		return &runs.Test{Created: time.Now()}
-	})
+	r, err := s.app.Registry.Ensure(testID)
 	if err != nil {
 		// The socket is already upgraded, so the rejection is a close frame
 		// rather than an HTTP status. 1013 (try again later) says the agent
@@ -207,12 +204,7 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 
 		log.Infof("Received message: %s", string(p))
 
-		handler := s.Handler
-		if handler == nil {
-			handler = NewCommandHandler(nil)
-		}
-
-		err = handler.Handle(testID, connID, p, r)
+		err = s.Handler.Handle(testID, connID, p, r)
 		if err != nil {
 			log.Errorf("Failed to process message: %s", err.Error())
 		}
@@ -248,11 +240,10 @@ func parseTestID(r *http.Request) (int, error) {
 }
 
 // isUserAuthorized checks if provided request has set correct authorization
-// headers. It authenticates through the same validator as the HTTP server
-// (auth.Shared), so the two paths cannot disagree about who is allowed in
-// (SEC-1), and an unconfigured validator denies rather than opens.
-func isUserAuthorized(w http.ResponseWriter, r *http.Request) bool {
-	validator := auth.Shared()
+// headers. The validator is the same one the HTTP server holds, carried on the
+// App, so the two paths cannot disagree about who is allowed in (SEC-1), and a
+// validator that was never configured denies rather than opens.
+func isUserAuthorized(w http.ResponseWriter, r *http.Request, validator *auth.Validator) bool {
 	if validator.Disabled() {
 		return true
 	}

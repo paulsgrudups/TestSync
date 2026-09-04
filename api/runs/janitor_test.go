@@ -6,22 +6,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paulsgrudups/testsync/internal/storagetest"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
-// newJanitorTest installs a fresh registry and store for a sweep test.
-func newJanitorTest(t *testing.T) {
+// newJanitorTest builds a registry, a service and a janitor for one sweep
+// test. Nothing is shared between tests, so a sweep can no longer reclaim
+// another test's runs.
+func newJanitorTest(
+	t *testing.T, interval, retention time.Duration,
+) (*Registry, *Service, *Janitor) {
 	t.Helper()
 
-	previousStore, previousService := Store, DefaultService
-	t.Cleanup(func() {
-		Store, DefaultService = previousStore, previousService
-		AllTests = make(map[int]*Test)
-	})
+	registry, service := newTestSetup(t, DefaultLimits())
 
-	AllTests = make(map[int]*Test)
-	SetDataStore(storagetest.NewStore(t))
+	return registry, service, NewJanitor(interval, retention, registry, service)
 }
 
 // TestJanitorKeepsRunsWithConnectedAgents is the STAB-4 regression test.
@@ -32,39 +30,40 @@ func newJanitorTest(t *testing.T) {
 // empty run: different connection counts, and barriers the two halves could
 // not join.
 func TestJanitorKeepsRunsWithConnectedAgents(t *testing.T) {
-	newJanitorTest(t)
+	t.Parallel()
 
 	const (
 		busy = 1
 		idle = 2
 	)
 
+	registry, service, janitor := newJanitorTest(t, time.Hour, 12*time.Hour)
+
 	expired := time.Now().Add(-24 * time.Hour)
 
-	busyRun := &Test{Created: expired}
-	SetTest(busy, busyRun)
+	busyRun := newRun(t, registry, busy, expired)
 
 	if _, err := busyRun.AddConnection(wsutil.NewClient(nil)); err != nil {
 		t.Fatalf("failed to attach connection: %v", err)
 	}
 
-	SetTest(idle, &Test{Created: expired})
+	newRun(t, registry, idle, expired)
 
-	if err := Store.SaveData(busy, []byte("in use")); err != nil {
+	if err := service.store.SaveData(busy, []byte("in use")); err != nil {
 		t.Fatalf("failed to save data: %v", err)
 	}
 
-	NewJanitor(time.Hour, 12*time.Hour).Sweep(time.Now())
+	janitor.Sweep(time.Now())
 
-	if _, ok := GetTest(busy); !ok {
+	if _, ok := registry.Get(busy); !ok {
 		t.Fatal("a run with a connected agent was deleted by the sweep")
 	}
 
-	if _, ok, err := Store.LoadData(busy); err != nil || !ok {
+	if _, ok, err := service.store.LoadData(busy); err != nil || !ok {
 		t.Fatalf("the data of a run with a connected agent was deleted: ok=%v err=%v", ok, err)
 	}
 
-	if _, ok := GetTest(idle); ok {
+	if _, ok := registry.Get(idle); ok {
 		t.Fatal("an expired run with no agents survived the sweep")
 	}
 }
@@ -72,13 +71,15 @@ func TestJanitorKeepsRunsWithConnectedAgents(t *testing.T) {
 // TestJanitorKeepsRunsInsideRetention covers the other half: a recent run is
 // not swept, however few agents it has.
 func TestJanitorKeepsRunsInsideRetention(t *testing.T) {
-	newJanitorTest(t)
+	t.Parallel()
 
-	SetTest(3, &Test{Created: time.Now()})
+	registry, _, janitor := newJanitorTest(t, time.Hour, time.Hour)
 
-	NewJanitor(time.Hour, time.Hour).Sweep(time.Now())
+	newRun(t, registry, 3, time.Now())
 
-	if _, ok := GetTest(3); !ok {
+	janitor.Sweep(time.Now())
+
+	if _, ok := registry.Get(3); !ok {
 		t.Fatal("a run inside its retention window was deleted")
 	}
 }
@@ -87,18 +88,19 @@ func TestJanitorKeepsRunsInsideRetention(t *testing.T) {
 // by a previous process: the sweep used to run for the first time one full
 // interval (12 hours) after startup.
 func TestJanitorSweepsOnceAtStartup(t *testing.T) {
-	newJanitorTest(t)
+	t.Parallel()
 
-	SetTest(4, &Test{Created: time.Now().Add(-24 * time.Hour)})
+	registry, _, janitor := newJanitorTest(t, time.Hour, time.Hour)
 
-	janitor := NewJanitor(time.Hour, time.Hour)
+	newRun(t, registry, 4, time.Now().Add(-24*time.Hour))
+
 	janitor.Start(t.Context())
 
 	defer janitor.Stop()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if _, ok := GetTest(4); !ok {
+		if _, ok := registry.Get(4); !ok {
 			return
 		}
 
@@ -114,11 +116,12 @@ func TestJanitorSweepsOnceAtStartup(t *testing.T) {
 // process, so it can be stopped. Route registration used to start a ticker
 // that had no shutdown path at all.
 func TestJanitorStopEndsItsGoroutine(t *testing.T) {
-	newJanitorTest(t)
+	// Not parallel: it counts goroutines, which only means anything while
+	// nothing else in this package is starting any.
+	_, _, janitor := newJanitorTest(t, 10*time.Millisecond, time.Hour)
 
 	before := runtime.NumGoroutine()
 
-	janitor := NewJanitor(10*time.Millisecond, time.Hour)
 	janitor.Start(context.Background())
 
 	stopped := make(chan struct{})
@@ -140,7 +143,9 @@ func TestJanitorStopEndsItsGoroutine(t *testing.T) {
 // TestJanitorStopIsSafeWhenNeverStarted keeps shutdown honest: it runs even
 // when startup failed before the janitor was started.
 func TestJanitorStopIsSafeWhenNeverStarted(t *testing.T) {
-	janitor := NewJanitor(time.Hour, time.Hour)
+	t.Parallel()
+
+	_, _, janitor := newJanitorTest(t, time.Hour, time.Hour)
 
 	janitor.Stop()
 	janitor.Stop()

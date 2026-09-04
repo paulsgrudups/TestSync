@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/paulsgrudups/testsync/utils"
 )
@@ -20,15 +19,6 @@ var (
 	// ErrUnknownAuthMode is returned for an auth mode the server does not
 	// implement.
 	ErrUnknownAuthMode = errors.New("unknown auth mode")
-)
-
-var (
-	sharedMu sync.RWMutex
-
-	// shared is the single validator both the HTTP and the WebSocket server
-	// authenticate through, so the two paths cannot drift apart (SEC-1). It is
-	// nil until SetShared is called, and a nil validator rejects everything.
-	shared *Validator
 )
 
 // Validator validates BasicAuth credentials in constant time.
@@ -84,24 +74,6 @@ func NewFromConfig(
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownAuthMode, authConf.Mode)
 	}
-}
-
-// SetShared installs the process-wide validator used by both the HTTP and the
-// WebSocket server.
-func SetShared(v *Validator) {
-	sharedMu.Lock()
-	defer sharedMu.Unlock()
-
-	shared = v
-}
-
-// Shared returns the process-wide validator. It is nil until SetShared is
-// called, and a nil validator rejects every request.
-func Shared() *Validator {
-	sharedMu.RLock()
-	defer sharedMu.RUnlock()
-
-	return shared
 }
 
 // Disabled reports whether authentication was explicitly turned off.

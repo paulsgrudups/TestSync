@@ -19,12 +19,8 @@ type CommandHandler struct {
 	service *runs.Service
 }
 
-// NewCommandHandler creates a handler. If service is nil, uses runs.DefaultService.
+// NewCommandHandler creates a handler over the given service.
 func NewCommandHandler(service *runs.Service) *CommandHandler {
-	if service == nil {
-		service = runs.DefaultService
-	}
-
 	return &CommandHandler{service: service}
 }
 

@@ -6,11 +6,14 @@ import (
 	"testing"
 )
 
+// TestHealthEndpoint is the TEST-2 regression test. It used to pass only
+// because Go runs test files in source order: api_test.go sorts first and
+// installed the credential global this test never set, so renaming either file
+// changed whether this one passed.
 func TestHealthEndpoint(t *testing.T) {
-	handler, err := HandleRoutes()
-	if err != nil {
-		t.Fatalf("failed to create router: %v", err)
-	}
+	t.Parallel()
+
+	handler := newTestRouter(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()

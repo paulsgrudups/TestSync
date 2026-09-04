@@ -78,13 +78,13 @@ type TestState struct {
 	Checkpoints []CheckpointState
 }
 
-// AllTestStates returns a snapshot of every known test run, ordered by test
-// ID. It is read-only: nothing it returns aliases live run state, and taking
-// it never releases a barrier nor mutates a run.
-func AllTestStates() []TestState {
+// States returns a snapshot of every run in the registry, ordered by test ID.
+// It is read-only: nothing it returns aliases live run state, and taking it
+// never releases a barrier nor mutates a run.
+func (reg *Registry) States() []TestState {
 	states := make([]TestState, 0)
 
-	RangeTests(func(id int, t *Test) {
+	reg.Range(func(id int, t *Test) {
 		states = append(states, t.State(id))
 	})
 

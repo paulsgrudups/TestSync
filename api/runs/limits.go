@@ -3,7 +3,6 @@ package runs
 import (
 	"errors"
 	"fmt"
-	"sync/atomic"
 
 	"github.com/paulsgrudups/testsync/utils"
 )
@@ -33,8 +32,9 @@ var (
 	ErrDataTooLarge = errors.New("test data too large")
 )
 
-// Limits bounds what one server will hold. The zero value is not usable; call
-// [DefaultLimits] or install the operator's configuration with [SetLimits].
+// Limits bounds what one server will hold. The zero value bounds nothing, so
+// a [Registry] is built from [DefaultLimits] or from the operator's
+// configuration through [LimitsFromConfig].
 type Limits struct {
 	// MaxTests is how many test runs may be registered at once.
 	MaxTests int
@@ -51,11 +51,6 @@ type Limits struct {
 	// accepted by one path is accepted by the other.
 	MaxDataBytes int64
 }
-
-// current holds the limits in force. It is set once during startup and read
-// from every connection goroutine, so it is swapped atomically rather than
-// guarded by a lock that every request would have to take.
-var current atomic.Pointer[Limits]
 
 // DefaultLimits returns the limits used when the operator configured none.
 func DefaultLimits() Limits {
@@ -91,28 +86,14 @@ func LimitsFromConfig(conf utils.LimitsConfig) Limits {
 	return limits
 }
 
-// SetLimits installs the limits the server enforces. It is called once during
-// startup; until it is, [CurrentLimits] reports the defaults, so a process
-// that forgets to call it is bounded rather than open.
-func SetLimits(limits Limits) {
-	current.Store(&limits)
-}
-
-// CurrentLimits returns the limits in force.
-func CurrentLimits() Limits {
-	if limits := current.Load(); limits != nil {
-		return *limits
-	}
-
-	return DefaultLimits()
-}
-
-// checkDataSize reports whether a payload may be stored.
-func checkDataSize(data []byte) error {
-	limit := CurrentLimits().MaxDataBytes
-	if limit <= 0 || int64(len(data)) <= limit {
+// checkDataSize reports whether a payload may be stored under these limits.
+func (l Limits) checkDataSize(data []byte) error {
+	if l.MaxDataBytes <= 0 || int64(len(data)) <= l.MaxDataBytes {
 		return nil
 	}
 
-	return fmt.Errorf("%w: %d bytes exceeds the %d byte limit", ErrDataTooLarge, len(data), limit)
+	return fmt.Errorf(
+		"%w: %d bytes exceeds the %d byte limit",
+		ErrDataTooLarge, len(data), l.MaxDataBytes,
+	)
 }
