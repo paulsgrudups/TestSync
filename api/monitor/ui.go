@@ -2,13 +2,12 @@ package monitor
 
 import (
 	_ "embed"
+	"log/slog"
 	"net/http"
 
 	"github.com/gorilla/mux"
 
 	"github.com/paulsgrudups/testsync/api/auth"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // contentSecurityPolicy keeps the page self-contained. Nothing is fetched from
@@ -35,25 +34,25 @@ var (
 // registerUIRoutes serves the operator page and its two assets. They are
 // listed one by one rather than served from a file server: there is no
 // directory listing, no path to traverse and no guessing about content types.
-func registerUIRoutes(r *mux.Router, validator *auth.Validator) {
+func registerUIRoutes(r *mux.Router, validator *auth.Validator, logger *slog.Logger) {
 	uiRouter := r.PathPrefix(UIPrefix).Subrouter().StrictSlash(false)
-	uiRouter.Use(challengeUnauthorized, auth.BasicAuthMiddleware(validator))
+	uiRouter.Use(challengeUnauthorized, auth.BasicAuthMiddleware(validator, logger))
 
-	page := assetHandler("text/html; charset=UTF-8", indexHTML)
+	page := assetHandler("text/html; charset=UTF-8", indexHTML, logger)
 
 	uiRouter.HandleFunc("", page).Methods(http.MethodGet)
 	uiRouter.HandleFunc("/", page).Methods(http.MethodGet)
 	uiRouter.HandleFunc(
-		"/app.css", assetHandler("text/css; charset=UTF-8", appCSS),
+		"/app.css", assetHandler("text/css; charset=UTF-8", appCSS, logger),
 	).Methods(http.MethodGet)
 	uiRouter.HandleFunc(
-		"/app.js", assetHandler("text/javascript; charset=UTF-8", appJS),
+		"/app.js", assetHandler("text/javascript; charset=UTF-8", appJS, logger),
 	).Methods(http.MethodGet)
 }
 
 // assetHandler serves one embedded asset.
-func assetHandler(contentType string, body []byte) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+func assetHandler(contentType string, body []byte, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -61,7 +60,7 @@ func assetHandler(contentType string, body []byte) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 
 		if _, err := w.Write(body); err != nil {
-			log.Debugf("failed to write monitoring asset: %v", err)
+			logger.DebugContext(r.Context(), "failed to write a monitoring asset", "error", err)
 		}
 	}
 }

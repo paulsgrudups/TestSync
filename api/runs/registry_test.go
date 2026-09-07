@@ -9,7 +9,7 @@ import (
 func TestRegistryEnsureAndGet(t *testing.T) {
 	t.Parallel()
 
-	registry := NewRegistry(DefaultLimits())
+	registry := NewRegistry(DefaultLimits(), nil)
 
 	created, err := registry.Ensure(10)
 	if err != nil {
@@ -38,7 +38,7 @@ func TestRegistryEnsureAndGet(t *testing.T) {
 func TestRegistryDelete(t *testing.T) {
 	t.Parallel()
 
-	registry := NewRegistry(DefaultLimits())
+	registry := NewRegistry(DefaultLimits(), nil)
 
 	if _, err := registry.Ensure(5); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -61,8 +61,8 @@ func TestRegistryDelete(t *testing.T) {
 func TestRegistriesAreIndependent(t *testing.T) {
 	t.Parallel()
 
-	first := NewRegistry(DefaultLimits())
-	second := NewRegistry(DefaultLimits())
+	first := NewRegistry(DefaultLimits(), nil)
+	second := NewRegistry(DefaultLimits(), nil)
 
 	if _, err := first.Ensure(1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -86,8 +86,8 @@ func TestRegistryLimitsAreFixedAtConstruction(t *testing.T) {
 	limits := DefaultLimits()
 	limits.MaxTests = 1
 
-	strict := NewRegistry(limits)
-	relaxed := NewRegistry(DefaultLimits())
+	strict := NewRegistry(limits, nil)
+	relaxed := NewRegistry(DefaultLimits(), nil)
 
 	if _, err := strict.Ensure(1); err != nil {
 		t.Fatalf("the first run was refused: %v", err)
@@ -107,7 +107,7 @@ func TestRegistryLimitsAreFixedAtConstruction(t *testing.T) {
 func TestRegistryRangeSeesEveryRun(t *testing.T) {
 	t.Parallel()
 
-	registry := NewRegistry(DefaultLimits())
+	registry := NewRegistry(DefaultLimits(), nil)
 
 	for id := range 3 {
 		newRun(t, registry, id, time.Now())

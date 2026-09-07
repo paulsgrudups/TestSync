@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/afero"
@@ -30,6 +31,16 @@ const (
 	// opt-out for local development and is announced with a warning banner on
 	// every startup.
 	AuthModeNone = "none"
+)
+
+// Log output formats.
+const (
+	// LogFormatJSON emits one JSON object per entry. It is the default: logs
+	// are read by collectors far more often than by people.
+	LogFormatJSON = "json"
+
+	// LogFormatText emits the human-readable key=value form.
+	LogFormatText = "text"
 
 	// DefaultHTTPPort is the port the HTTP API listens on when none is set.
 	DefaultHTTPPort = 9104
@@ -135,11 +146,16 @@ type AuthConfig struct {
 type LogConfig struct {
 	// Which log level to use.
 	// Available values: DEBUG, INFO, WARN, ERROR.
-	// defautls to INFO.
+	// Defaults to INFO.
 	Level string `json:"level"`
 
 	// Directory where to save log file.
 	Dir string `json:"dir"`
+
+	// Format selects the shape of a log line: "json" for one JSON object per
+	// entry, which is what a log collector wants, or "text" for the
+	// human-readable key=value form. Defaults to json.
+	Format string `json:"format"`
 }
 
 // StorageConfig defines storage settings for test data.
@@ -166,6 +182,10 @@ func ApplyDefaults(conf *Config) {
 
 	if conf.Logging.Level == "" {
 		conf.Logging.Level = "INFO"
+	}
+
+	if conf.Logging.Format == "" {
+		conf.Logging.Format = LogFormatJSON
 	}
 
 	if conf.Logging.Dir == "" {
@@ -232,6 +252,10 @@ func Validate(conf *Config) error {
 		)
 	}
 
+	if err := validateLogging(conf.Logging); err != nil {
+		return err
+	}
+
 	limits := map[string]int64{
 		"limits.max_tests":                int64(conf.Limits.MaxTests),
 		"limits.max_connections_per_test": int64(conf.Limits.MaxConnectionsPerTest),
@@ -249,6 +273,25 @@ func Validate(conf *Config) error {
 	}
 
 	return nil
+}
+
+// validateLogging reports an unusable logging section. Both settings are
+// rejected at startup rather than silently falling back, so a typo does not
+// leave an operator reading the wrong format at the wrong level.
+func validateLogging(conf LogConfig) error {
+	if _, err := ParseLogLevel(conf.Level); err != nil {
+		return err
+	}
+
+	switch strings.ToLower(strings.TrimSpace(conf.Format)) {
+	case "", LogFormatJSON, LogFormatText:
+		return nil
+	default:
+		return fmt.Errorf(
+			"logging.format is %q; use %q or %q",
+			conf.Format, LogFormatJSON, LogFormatText,
+		)
+	}
 }
 
 // validatePort reports whether a configured port can be listened on.

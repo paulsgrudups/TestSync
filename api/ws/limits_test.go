@@ -173,7 +173,7 @@ func TestUpdateDataRejectsOversizedPayload(t *testing.T) {
 		t.Fatalf("expected %q, got %+v", CodePayloadTooLarge, content)
 	}
 
-	if _, err := application.Service.ReadTestData(testID); err == nil {
+	if _, err := application.Service.ReadTestData(t.Context(), testID); err == nil {
 		t.Fatal("a refused payload was stored")
 	}
 }

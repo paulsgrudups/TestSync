@@ -10,30 +10,23 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/utils"
+	"github.com/paulsgrudups/testsync/internal/app"
+	"github.com/paulsgrudups/testsync/internal/apptest"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
-// newTestRouter builds a router carrying only the monitoring routes, over a
-// registry and a validator belonging to this test alone (SEC-1, TEST-2).
-func newTestRouter(t *testing.T) (http.Handler, *runs.Registry) {
+// newTestRouter builds a router carrying only the monitoring routes, over an
+// application belonging to this test alone (SEC-1, TEST-2).
+func newTestRouter(t *testing.T) (http.Handler, *app.App) {
 	t.Helper()
 
-	validator, err := auth.NewValidator(
-		utils.BasicCredentials{Username: "user", Password: "pass"},
-	)
-	if err != nil {
-		t.Fatalf("failed to create validator: %v", err)
-	}
-
-	registry := runs.NewRegistry(runs.DefaultLimits())
+	application := apptest.NewDefault(t)
 
 	router := mux.NewRouter().StrictSlash(false)
-	RegisterRoutes(router, registry, validator)
+	RegisterRoutes(router, application)
 
-	return router, registry
+	return router, application
 }
 
 // get performs an authenticated GET against the monitoring routes.
@@ -156,13 +149,13 @@ func TestListRunsEmpty(t *testing.T) {
 func TestListRunsShape(t *testing.T) {
 	t.Parallel()
 
-	handler, registry := newTestRouter(t)
+	handler, application := newTestRouter(t)
 
-	waiting, waitingIDs := newRun(t, registry, 4242, 3)
+	waiting, waitingIDs := newRun(t, application, 4242, 3)
 	joinCheckpoint(t, waiting, "login-barrier", 3, waitingIDs[0])
 	joinCheckpoint(t, waiting, "login-barrier", 3, waitingIDs[1])
 
-	released, releasedIDs := newRun(t, registry, 17, 1)
+	released, releasedIDs := newRun(t, application, 17, 1)
 	joinCheckpoint(t, released, "warmup", 1, releasedIDs[0])
 
 	rec := get(t, handler, "/api/v1/runs")
@@ -206,10 +199,15 @@ func TestListRunsShape(t *testing.T) {
 func TestRunDetailShape(t *testing.T) {
 	t.Parallel()
 
-	handler, registry := newTestRouter(t)
+	handler, application := newTestRouter(t)
 
-	run, ids := newRun(t, registry, 900, 3)
-	run.SetData([]byte("secret-payload"))
+	run, ids := newRun(t, application, 900, 3)
+
+	// Stored through the service, which is the only owner of payloads now.
+	if err := application.Service.UpdateTestData(t.Context(), 900, []byte("secret-payload")); err != nil {
+		t.Fatalf("failed to store payload: %v", err)
+	}
+
 	joinCheckpoint(t, run, "stage-2", 3, ids[0])
 	joinCheckpoint(t, run, "stage-2", 3, ids[2])
 	joinCheckpoint(t, run, "stage-1", 1, ids[0])
@@ -303,9 +301,9 @@ func TestRunDetailNotFound(t *testing.T) {
 func TestMonitorRoutesAreReadOnly(t *testing.T) {
 	t.Parallel()
 
-	handler, registry := newTestRouter(t)
+	handler, application := newTestRouter(t)
 
-	newRun(t, registry, 55, 1)
+	newRun(t, application, 55, 1)
 
 	methods := []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
 
@@ -371,7 +369,6 @@ type runSummaryDTO struct {
 	Waiting               bool      `json:"waiting"`
 	HasData               bool      `json:"has_data"`
 	DataSizeBytes         int       `json:"data_size_bytes"`
-	ForceEnd              bool      `json:"force_end"`
 }
 
 // joinCheckpoint joins a barrier and fails the test if the run refused.
@@ -390,18 +387,18 @@ func joinCheckpoint(
 // newRun registers a run with the requested number of attached connections.
 // The connections are never written to, so they need no live socket.
 func newRun(
-	t *testing.T, registry *runs.Registry, testID, connections int,
+	t *testing.T, a *app.App, testID, connections int,
 ) (*runs.Test, []runs.ConnID) {
 	t.Helper()
 
-	run, err := registry.Ensure(testID)
+	run, err := a.Registry.Ensure(testID)
 	if err != nil {
 		t.Fatalf("failed to register run: %v", err)
 	}
 
 	ids := make([]runs.ConnID, 0, connections)
 	for range connections {
-		id, err := run.AddConnection(wsutil.NewClient(nil))
+		id, err := run.AddConnection(wsutil.NewClient(nil, nil))
 		if err != nil {
 			t.Fatalf("failed to attach connection: %v", err)
 		}
@@ -410,4 +407,54 @@ func newRun(
 	}
 
 	return run, ids
+}
+
+// TestDataSizesComeFromTheStore covers the payload sizes on both endpoints.
+// They used to be read from a copy of the payload cached on the run; the run
+// holds no payload any more, so the numbers now come from storage and the two
+// views must agree (CODE-3).
+func TestDataSizesComeFromTheStore(t *testing.T) {
+	t.Parallel()
+
+	handler, application := newTestRouter(t)
+
+	newRun(t, application, 700, 1)
+	newRun(t, application, 701, 1)
+
+	payload := []byte("twenty-bytes-exactly")
+	if err := application.Service.UpdateTestData(t.Context(), 700, payload); err != nil {
+		t.Fatalf("failed to store payload: %v", err)
+	}
+
+	var list struct {
+		Runs []runSummaryDTO `json:"runs"`
+	}
+
+	decode(t, get(t, handler, "/api/v1/runs"), &list)
+
+	sizes := make(map[int]runSummaryDTO, len(list.Runs))
+	for _, run := range list.Runs {
+		sizes[run.TestID] = run
+	}
+
+	if got := sizes[700]; got.DataSizeBytes != len(payload) || !got.HasData {
+		t.Fatalf("list view reported %+v for a run holding %d bytes", got, len(payload))
+	}
+
+	if got := sizes[701]; got.DataSizeBytes != 0 || got.HasData {
+		t.Fatalf("list view reported %+v for a run holding nothing", got)
+	}
+
+	var detail struct {
+		Run runSummaryDTO `json:"run"`
+	}
+
+	decode(t, get(t, handler, "/api/v1/runs/700"), &detail)
+
+	if detail.Run.DataSizeBytes != sizes[700].DataSizeBytes {
+		t.Fatalf(
+			"detail view reported %d bytes, list view %d",
+			detail.Run.DataSizeBytes, sizes[700].DataSizeBytes,
+		)
+	}
 }

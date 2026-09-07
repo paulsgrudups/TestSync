@@ -2,14 +2,12 @@ package wsutil
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gorilla/websocket"
-	"github.com/pkg/errors"
 )
-
-// HandlerFunc describes the signature for WS handlers.
-type HandlerFunc func(b []byte)
 
 // Message describes the body that WS should receive.
 type Message struct {
@@ -52,7 +50,7 @@ func SendMessage(client *Client, cmd string, content any) error {
 
 	c, err := json.Marshal(content)
 	if err != nil {
-		return errors.Wrap(err, "could not marshal command content")
+		return fmt.Errorf("could not marshal command content: %w", err)
 	}
 
 	message, err := json.Marshal(Message{
@@ -60,12 +58,12 @@ func SendMessage(client *Client, cmd string, content any) error {
 		Content: RawMessage{Bytes: c},
 	})
 	if err != nil {
-		return errors.Wrap(err, "could not marshal message for WebSocket")
+		return fmt.Errorf("could not marshal message for WebSocket: %w", err)
 	}
 
 	err = client.Send(websocket.TextMessage, message)
 	if err != nil {
-		return errors.Wrap(err, "could not send WebSocket message")
+		return fmt.Errorf("could not send WebSocket message: %w", err)
 	}
 
 	return nil

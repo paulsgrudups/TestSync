@@ -23,7 +23,7 @@ func limitsWith(apply func(*Limits)) Limits {
 func TestMaxTestsRejectsNewRuns(t *testing.T) {
 	t.Parallel()
 
-	registry := NewRegistry(limitsWith(func(l *Limits) { l.MaxTests = 2 }))
+	registry := NewRegistry(limitsWith(func(l *Limits) { l.MaxTests = 2 }), nil)
 
 	for id := range 2 {
 		if _, err := registry.Ensure(id); err != nil {
@@ -59,17 +59,17 @@ func TestMaxConnectionsPerTestRejectsAgents(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry(
-		limitsWith(func(l *Limits) { l.MaxConnectionsPerTest = 2 }),
+		limitsWith(func(l *Limits) { l.MaxConnectionsPerTest = 2 }), nil,
 	)
 	run := newRun(t, registry, 1, time.Now())
 
 	for i := range 2 {
-		if _, err := run.AddConnection(wsutil.NewClient(nil)); err != nil {
+		if _, err := run.AddConnection(wsutil.NewClient(nil, nil)); err != nil {
 			t.Fatalf("agent %d was refused below the limit: %v", i, err)
 		}
 	}
 
-	id, err := run.AddConnection(wsutil.NewClient(nil))
+	id, err := run.AddConnection(wsutil.NewClient(nil, nil))
 	if !errors.Is(err, ErrConnectionLimitReached) {
 		t.Fatalf("expected ErrConnectionLimitReached, got %v", err)
 	}
@@ -88,7 +88,7 @@ func TestMaxConnectionsPerTestRejectsAgents(t *testing.T) {
 		break
 	}
 
-	if _, err := run.AddConnection(wsutil.NewClient(nil)); err != nil {
+	if _, err := run.AddConnection(wsutil.NewClient(nil, nil)); err != nil {
 		t.Fatalf("a freed slot was not reusable: %v", err)
 	}
 }
@@ -100,11 +100,11 @@ func TestMaxCheckpointsPerTestRejectsNewIdentifiers(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry(
-		limitsWith(func(l *Limits) { l.MaxCheckpointsPerTest = 2 }),
+		limitsWith(func(l *Limits) { l.MaxCheckpointsPerTest = 2 }), nil,
 	)
 	run := newRun(t, registry, 1, time.Now())
 
-	connID, err := run.AddConnection(wsutil.NewClient(nil))
+	connID, err := run.AddConnection(wsutil.NewClient(nil, nil))
 	if err != nil {
 		t.Fatalf("failed to attach connection: %v", err)
 	}
@@ -147,16 +147,16 @@ func TestMaxDataBytesRejectsOversizedPayloads(t *testing.T) {
 
 	oversized := make([]byte, 17)
 
-	if err := service.CreateTestData(1, oversized); !errors.Is(err, ErrDataTooLarge) {
+	if err := service.CreateTestData(t.Context(), 1, oversized); !errors.Is(err, ErrDataTooLarge) {
 		t.Fatalf("expected ErrDataTooLarge from create, got %v", err)
 	}
 
-	if err := service.UpdateTestData(1, oversized); !errors.Is(err, ErrDataTooLarge) {
+	if err := service.UpdateTestData(t.Context(), 1, oversized); !errors.Is(err, ErrDataTooLarge) {
 		t.Fatalf("expected ErrDataTooLarge from update, got %v", err)
 	}
 
 	// Nothing was stored and no run was registered for the refused payload.
-	if _, err := service.ReadTestData(1); !errors.Is(err, ErrTestNotFound) {
+	if _, err := service.ReadTestData(t.Context(), 1); !errors.Is(err, ErrTestNotFound) {
 		t.Fatalf("a refused payload was stored: %v", err)
 	}
 
@@ -164,7 +164,7 @@ func TestMaxDataBytesRejectsOversizedPayloads(t *testing.T) {
 		t.Fatal("a refused payload registered a run")
 	}
 
-	if err := service.CreateTestData(1, make([]byte, 16)); err != nil {
+	if err := service.CreateTestData(t.Context(), 1, make([]byte, 16)); err != nil {
 		t.Fatalf("a payload at the limit was refused: %v", err)
 	}
 }

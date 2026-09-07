@@ -3,12 +3,12 @@ package utils
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"strings"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // ErrorResponse will be sent in case an error occurs during request processing.
@@ -36,58 +36,64 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// LogRequests returns handler function that processes all incoming HTTP
-// requests all requests are logged to specified file.
-func LogRequests(next http.Handler) http.Handler {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		rw := newResponseWriter(w)
-		start := time.Now()
+// LogRequests returns middleware that logs one line per request through the
+// given logger. The query string is dropped: credentials may still arrive in
+// one on the deprecated WebSocket path (SEC-3), and a log file is exactly
+// where they must not end up.
+func LogRequests(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rw := newResponseWriter(w)
+			start := time.Now()
 
-		next.ServeHTTP(rw, r)
+			next.ServeHTTP(rw, r)
 
-		reqPath, _, _ := strings.Cut(r.RequestURI, "?")
-		if len(strings.Split(r.RequestURI, "?")) > 1 {
-			reqPath += "?"
-		}
+			reqPath, _, hadQuery := strings.Cut(r.RequestURI, "?")
+			if hadQuery {
+				reqPath += "?"
+			}
 
-		log.Infof(
-			"[%s] %s:\t%s  - %d",
-			time.Since(start), r.Method, reqPath, rw.statusCode,
-		)
+			logger.InfoContext(r.Context(), "request",
+				"method", r.Method,
+				"path", reqPath,
+				"status", rw.statusCode,
+				"duration", time.Since(start).String(),
+			)
+		})
 	}
-
-	return http.HandlerFunc(handler)
 }
 
 // RecoverPanics returns a handler that turns a panic in any handler below it
 // into a logged stack trace and a 500 response. net/http recovers panics in the
 // handler goroutine, but [http.TimeoutHandler] re-panics them in the caller's
 // goroutine, so the server needs its own net.
-func RecoverPanics(next http.Handler) http.Handler {
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			rec := recover()
-			if rec == nil {
-				return
-			}
+func RecoverPanics(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				rec := recover()
+				if rec == nil {
+					return
+				}
 
-			// net/http's own signal for "abort this connection quietly".
-			if recErr, ok := rec.(error); ok && errors.Is(recErr, http.ErrAbortHandler) {
-				panic(rec)
-			}
+				// net/http's own signal for "abort this connection quietly".
+				if recErr, ok := rec.(error); ok && errors.Is(recErr, http.ErrAbortHandler) {
+					panic(rec)
+				}
 
-			log.Errorf(
-				"Recovered panic while serving %s %s: %v\n%s",
-				r.Method, r.URL.Path, rec, debug.Stack(),
-			)
+				logger.ErrorContext(r.Context(), "recovered panic while serving a request",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"panic", fmt.Sprint(rec),
+					"stack", string(debug.Stack()),
+				)
 
-			HTTPError(w, "Internal server error", http.StatusInternalServerError)
-		}()
+				HTTPError(w, "Internal server error", http.StatusInternalServerError)
+			}()
 
-		next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r)
+		})
 	}
-
-	return http.HandlerFunc(handler)
 }
 
 // RecoverGoroutine recovers a panic in the goroutine it is deferred in and logs
@@ -95,24 +101,28 @@ func RecoverPanics(next http.Handler) http.Handler {
 // process and every other agent's run with it. Defer it as the first statement
 // of every spawned goroutine, so that it runs after the goroutine's own
 // cleanup.
-func RecoverGoroutine(name string) {
+func RecoverGoroutine(logger *slog.Logger, name string) {
 	if rec := recover(); rec != nil {
-		log.Errorf(
-			"Recovered panic in %s goroutine: %v\n%s", name, rec, debug.Stack(),
+		logger.Error("recovered panic in a goroutine",
+			"goroutine", name,
+			"panic", fmt.Sprint(rec),
+			"stack", string(debug.Stack()),
 		)
 	}
 }
 
-// HTTPError writes Loadero's default error response.
+// HTTPError writes the server's standard JSON error response.
+//
+// A failed write is deliberately ignored rather than logged: it means the
+// client is already gone, there is nothing left to tell it, and the request
+// logging middleware has already recorded the status. Logging it would need a
+// logger at every one of this function's call sites to say nothing useful.
 func HTTPError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(code)
 
-	// write error response and log if it fails
-	if err := json.NewEncoder(w).Encode(ErrorResponse{
+	_ = json.NewEncoder(w).Encode(ErrorResponse{
 		Code:  code,
 		Error: message,
-	}); err != nil {
-		log.Debugf("failed to write error response: %v", err)
-	}
+	})
 }

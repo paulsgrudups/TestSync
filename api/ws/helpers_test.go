@@ -12,7 +12,7 @@ import (
 // registry, the service and the validator all ride on the App, so one test's
 // server shares nothing with another's (CODE-1, TEST-2).
 func newServer(a *app.App) *Server {
-	return &Server{Handler: NewCommandHandler(a.Service), app: a}
+	return &Server{Handler: NewCommandHandler(a.Service, a.Log), app: a}
 }
 
 // newInsecureServer builds a server with authentication deliberately

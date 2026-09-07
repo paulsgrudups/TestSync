@@ -95,7 +95,7 @@ func TestStartupErrorsAreReadable(t *testing.T) {
 
 			conf, err := loadConfig(dir)
 			if err == nil {
-				err = setupLogging(conf.Logging)
+				_, err = setupLogging(conf.Logging)
 			}
 
 			if err == nil {
@@ -135,7 +135,7 @@ func TestListenReportsBindFailure(t *testing.T) {
 	}
 
 	select {
-	case err := <-listen(server, port):
+	case err := <-listen(server, port, utils.DiscardLogger()):
 		if err == nil {
 			t.Fatal("expected a listen error")
 		}
@@ -186,9 +186,9 @@ func TestShutdownLetsInFlightRequestsFinish(t *testing.T) {
 	utils.ApplyDefaults(&conf)
 
 	store := storagetest.NewStore(t)
-	application := app.New(conf, store, auth.NewDisabledValidator())
+	application := app.New(conf, store, auth.NewDisabledValidator(), utils.DiscardLogger())
 
-	if err := store.SaveData(7, []byte("payload")); err != nil {
+	if err := store.SaveData(t.Context(), 7, []byte("payload")); err != nil {
 		t.Fatalf("failed to seed data: %v", err)
 	}
 
@@ -203,7 +203,7 @@ func TestShutdownLetsInFlightRequestsFinish(t *testing.T) {
 		// arrives: it touches the store after shutdown has begun.
 		time.Sleep(300 * time.Millisecond)
 
-		data, _, err := store.LoadData(7)
+		data, _, err := store.LoadData(t.Context(), 7)
 		storeErr <- err
 
 		if err != nil {
@@ -247,7 +247,7 @@ func TestShutdownLetsInFlightRequestsFinish(t *testing.T) {
 	<-started
 
 	janitor := runs.NewJanitor(
-		time.Hour, time.Hour, application.Registry, application.Service,
+		time.Hour, time.Hour, application.Registry, application.Service, nil,
 	)
 	janitor.Start(t.Context())
 
@@ -271,7 +271,7 @@ func TestShutdownLetsInFlightRequestsFinish(t *testing.T) {
 
 	// The store is closed once nothing can read from it any more, and the
 	// janitor is stopped rather than left sweeping a closed database.
-	if _, _, err := store.LoadData(7); err == nil {
+	if _, _, err := store.LoadData(t.Context(), 7); err == nil {
 		t.Fatal("the data store was left open after shutdown")
 	}
 }

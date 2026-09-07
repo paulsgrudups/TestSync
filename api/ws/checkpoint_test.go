@@ -3,7 +3,7 @@ package ws
 import (
 	"encoding/json"
 	"fmt"
-	"io"
+	"log/slog"
 	"net/http/httptest"
 	"os"
 	"runtime"
@@ -14,19 +14,19 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
-
-	log "github.com/sirupsen/logrus"
 )
 
-// TestMain silences the global logger: these tests open dozens of connections
-// and are meant to be run with -count=20, which makes the per-message logging
-// unreadable.
+// TestMain silences the slog default, which is where the leaf packages log:
+// these tests open dozens of connections and are meant to be run with
+// -count=20, which per-message logging makes unreadable. Each server carries
+// its own logger, and apptest gives them a discarding one.
 //
-// Authentication is no longer set up here. Each server carries its own
+// Authentication is not set up here either. Each server carries its own
 // validator, so a test that wants an open server asks for one (SEC-1, CODE-1).
 func TestMain(m *testing.M) {
-	log.SetOutput(io.Discard)
+	slog.SetDefault(utils.DiscardLogger())
 
 	os.Exit(m.Run())
 }
@@ -121,10 +121,9 @@ func (a *agent) readLoop() {
 func (a *agent) close() {
 	a.closeOnce.Do(func() {
 		close(a.done)
-		if err := a.conn.Close(); err != nil {
-			// Best-effort close in tests; log for visibility
-			log.Debugf("failed to close agent connection: %v", err)
-		}
+		// Best-effort close: the peer may already be gone, which is exactly
+		// what several of these tests arrange.
+		_ = a.conn.Close()
 	})
 }
 

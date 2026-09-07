@@ -13,7 +13,7 @@ import (
 func NewStore(t *testing.T) *storage.SQLiteStore {
 	t.Helper()
 
-	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "testsync.db"))
+	store, err := storage.NewSQLiteStore(t.Context(), filepath.Join(t.TempDir(), "testsync.db"), nil)
 	if err != nil {
 		t.Fatalf("failed to create sqlite store: %v", err)
 	}

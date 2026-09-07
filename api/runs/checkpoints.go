@@ -5,22 +5,6 @@ import (
 	"time"
 )
 
-// GetData returns test data safely.
-func (t *Test) GetData() []byte {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	return t.Data
-}
-
-// SetData sets test data safely.
-func (t *Test) SetData(data []byte) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.Data = data
-}
-
 // JoinCheckpoint registers a connection as a member of the named checkpoint's
 // current round, creating the checkpoint the first time an identifier is seen.
 // Joining twice from the same connection is a no-op: a barrier releases on

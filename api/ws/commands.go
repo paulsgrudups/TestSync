@@ -2,11 +2,8 @@ package ws
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-
-	stderrors "errors"
-
-	"github.com/pkg/errors"
 
 	"github.com/paulsgrudups/testsync/api/runs"
 )
@@ -63,14 +60,14 @@ func waitCheckPoint(b []byte, connID runs.ConnID, t *runs.Test) error {
 
 	err := json.Unmarshal(b, &check)
 	if err != nil {
-		return errors.Wrap(err, "could not unmarshal checkpoint data")
+		return fmt.Errorf("could not unmarshal checkpoint data: %w", err)
 	}
 
 	// Validate before touching any state: an omitted target_count decodes as
 	// zero, which used to create a barrier that released on its first join and
 	// left the agents unsynchronized without telling anybody.
 	if check.Identifier == "" {
-		return stderrors.New("checkpoint identifier must not be empty")
+		return errors.New("checkpoint identifier must not be empty")
 	}
 
 	if check.TargetCount < 1 {

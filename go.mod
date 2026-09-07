@@ -5,8 +5,6 @@ go 1.25.5
 require (
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.3
-	github.com/pkg/errors v0.9.1
-	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/afero v1.15.0
 	github.com/spf13/pflag v1.0.10
 	modernc.org/sqlite v1.44.3

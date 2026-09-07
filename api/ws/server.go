@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -36,6 +37,16 @@ type Server struct {
 	pongWait time.Duration
 }
 
+// log returns the server's logger. A Server assembled without an App, which
+// only happens in a test, discards rather than panicking.
+func (s *Server) log() *slog.Logger {
+	if s == nil || s.app == nil || s.app.Log == nil {
+		return utils.DiscardLogger()
+	}
+
+	return s.app.Log
+}
+
 // pongWaitDuration returns the read deadline extension for a connection.
 func (s *Server) pongWaitDuration() time.Duration {
 	if s != nil && s.pongWait > 0 {
@@ -53,7 +64,7 @@ func StartWebSocketServer(a *app.App) *Server {
 	port := a.Config.WSPort
 
 	s := &Server{
-		Handler:   NewCommandHandler(a.Service),
+		Handler:   NewCommandHandler(a.Service, a.Log),
 		app:       a,
 		listenErr: make(chan error, 1),
 	}
@@ -67,7 +78,7 @@ func StartWebSocketServer(a *app.App) *Server {
 	}
 
 	go func() {
-		defer utils.RecoverGoroutine("websocket listener")
+		defer utils.RecoverGoroutine(s.log(), "websocket listener")
 
 		err := s.HTTPServer.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {

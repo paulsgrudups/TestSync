@@ -7,7 +7,9 @@
 package monitor
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -15,9 +17,8 @@ import (
 
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
+	"github.com/paulsgrudups/testsync/internal/app"
 	"github.com/paulsgrudups/testsync/utils"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // APIPrefix is the namespace of the monitoring API. It is versioned and kept
@@ -40,7 +41,6 @@ type runSummary struct {
 	Waiting               bool      `json:"waiting"`
 	HasData               bool      `json:"has_data"`
 	DataSizeBytes         int       `json:"data_size_bytes"`
-	ForceEnd              bool      `json:"force_end"`
 }
 
 // runListResponse is the body of GET /api/v1/runs.
@@ -76,34 +76,55 @@ type runDetailResponse struct {
 	Checkpoints []checkpointView `json:"checkpoints"`
 }
 
-// API serves the monitoring endpoints for one registry.
+// API serves the monitoring endpoints for one application.
+//
+// Coordination state comes from the registry and payload sizes come from the
+// service, because those are the two things that own them. The run used to
+// carry a cached copy of the payload, which is what let a monitoring response
+// be built without asking storage anything (CODE-3).
 type API struct {
 	registry *runs.Registry
+	service  *runs.Service
+	log      *slog.Logger
 }
 
 // RegisterRoutes registers the monitoring API and the UI page for the given
-// registry.
+// application.
 //
-// Both sit behind the same validator as every other route, passed in rather
-// than read from package state, so they cannot be registered into an open
-// state (SEC-1).
-func RegisterRoutes(r *mux.Router, registry *runs.Registry, validator *auth.Validator) {
-	api := &API{registry: registry}
+// Both sit behind the same validator as every other route, carried on the App
+// rather than read from package state, so they cannot be registered into an
+// open state (SEC-1).
+func RegisterRoutes(r *mux.Router, a *app.App) {
+	api := &API{registry: a.Registry, service: a.Service, log: a.Log}
+	validator := a.Auth
 
 	apiRouter := r.PathPrefix(APIPrefix).Subrouter().StrictSlash(false)
-	apiRouter.Use(challengeUnauthorized, auth.BasicAuthMiddleware(validator))
+	apiRouter.Use(challengeUnauthorized, auth.BasicAuthMiddleware(validator, a.Log))
 
 	apiRouter.HandleFunc("/runs", api.listRunsHandler).Methods(http.MethodGet)
 	apiRouter.HandleFunc(`/runs/{testID:\d+}`, api.runDetailHandler).
 		Methods(http.MethodGet)
 
-	registerUIRoutes(r, validator)
+	registerUIRoutes(r, validator, a.Log)
 }
 
 // listRunsHandler answers with every known run and enough state to tell at a
 // glance which of them is stuck on a barrier.
-func (a *API) listRunsHandler(w http.ResponseWriter, _ *http.Request) {
+func (a *API) listRunsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	states := a.registry.States()
+
+	// One query for every run's payload size, rather than one per run.
+	sizes, err := a.service.DataSizes(ctx)
+	if err != nil {
+		a.log.ErrorContext(ctx, "failed to read stored data sizes", "error", err)
+		utils.HTTPError(
+			w, "Could not read run data sizes", http.StatusInternalServerError,
+		)
+
+		return
+	}
 
 	now := time.Now().UTC()
 	body := runListResponse{
@@ -113,14 +134,16 @@ func (a *API) listRunsHandler(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	for _, state := range states {
-		body.Runs = append(body.Runs, summarize(state, now))
+		body.Runs = append(body.Runs, summarize(state, now, sizes[state.TestID]))
 	}
 
-	writeJSON(w, http.StatusOK, body)
+	a.writeJSON(ctx, w, http.StatusOK, body)
 }
 
 // runDetailHandler answers with the agents and checkpoints of a single run.
 func (a *API) runDetailHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	testID, err := runs.GetPathID(w, r, "testID")
 	if err != nil {
 		return
@@ -134,10 +157,22 @@ func (a *API) runDetailHandler(w http.ResponseWriter, r *http.Request) {
 
 	state := test.State(testID)
 
+	size, _, err := a.service.DataSize(ctx, testID)
+	if err != nil {
+		a.log.ErrorContext(ctx, "failed to read a stored data size",
+			"error", err, "test_id", testID,
+		)
+		utils.HTTPError(
+			w, "Could not read run data size", http.StatusInternalServerError,
+		)
+
+		return
+	}
+
 	now := time.Now().UTC()
 	body := runDetailResponse{
 		ServerTime:  now,
-		Run:         summarize(state, now),
+		Run:         summarize(state, now, size),
 		Connections: make([]connectionView, 0, len(state.Connections)),
 		Checkpoints: make([]checkpointView, 0, len(state.Checkpoints)),
 	}
@@ -162,12 +197,13 @@ func (a *API) runDetailHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, body)
+	a.writeJSON(ctx, w, http.StatusOK, body)
 }
 
-// summarize reduces a run snapshot to the counters the list view needs. It
-// deliberately drops the stored data and keeps only its size.
-func summarize(state runs.TestState, now time.Time) runSummary {
+// summarize reduces a run snapshot to the counters the list view needs. The
+// payload itself never reaches this function: only the size storage reported
+// for it.
+func summarize(state runs.TestState, now time.Time, dataSize int) runSummary {
 	summary := runSummary{
 		TestID:                state.TestID,
 		Created:               state.Created.UTC(),
@@ -177,9 +213,8 @@ func summarize(state runs.TestState, now time.Time) runSummary {
 		CheckpointCount:       len(state.Checkpoints),
 		WaitingCheckpoints:    0,
 		Waiting:               false,
-		HasData:               state.DataSize > 0,
-		DataSizeBytes:         state.DataSize,
-		ForceEnd:              state.ForceEnd,
+		HasData:               dataSize > 0,
+		DataSizeBytes:         dataSize,
 	}
 
 	for _, conn := range state.Connections {
@@ -201,13 +236,15 @@ func summarize(state runs.TestState, now time.Time) runSummary {
 
 // writeJSON encodes body as the response. Responses are never cached: the page
 // polls this endpoint and a stale answer would read as a stalled run.
-func writeJSON(w http.ResponseWriter, code int, body any) {
+func (a *API) writeJSON(
+	ctx context.Context, w http.ResponseWriter, code int, body any,
+) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
 
 	if err := json.NewEncoder(w).Encode(body); err != nil {
-		log.Debugf("failed to write monitoring response: %v", err)
+		a.log.DebugContext(ctx, "failed to write a monitoring response", "error", err)
 	}
 }

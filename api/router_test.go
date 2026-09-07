@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+
+	"github.com/paulsgrudups/testsync/utils"
 )
 
 // TestRouterRecoversHandlerPanic covers the HTTP router's half of STAB-1: a
@@ -15,7 +17,7 @@ func TestRouterRecoversHandlerPanic(t *testing.T) {
 	t.Parallel()
 
 	router := mux.NewRouter()
-	if err := registerMiddlewares(router); err != nil {
+	if err := registerMiddlewares(router, utils.DiscardLogger()); err != nil {
 		t.Fatalf("failed to register middlewares: %v", err)
 	}
 

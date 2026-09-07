@@ -2,9 +2,12 @@ package runs
 
 import (
 	"fmt"
+	"log/slog"
 	"maps"
 	"sync"
 	"time"
+
+	"github.com/paulsgrudups/testsync/utils"
 )
 
 // Registry holds every test run one server knows about, together with the
@@ -23,15 +26,24 @@ type Registry struct {
 	// mutable state from a connection goroutine.
 	limits Limits
 
+	// log is stamped into every run this registry creates, so a line about a
+	// barrier can name the run it belongs to without the barrier having to
+	// reach back for a process-wide logger.
+	log *slog.Logger
+
 	mu    sync.RWMutex
 	tests map[int]*Test
 }
 
 // NewRegistry creates an empty registry that enforces the given limits. Pass
 // [DefaultLimits] when the operator configured none: a registry whose limits
-// are the zero value enforces nothing at all.
-func NewRegistry(limits Limits) *Registry {
-	return &Registry{limits: limits, tests: make(map[int]*Test)}
+// are the zero value enforces nothing at all. A nil logger discards.
+func NewRegistry(limits Limits, logger *slog.Logger) *Registry {
+	if logger == nil {
+		logger = utils.DiscardLogger()
+	}
+
+	return &Registry{limits: limits, log: logger, tests: make(map[int]*Test)}
 }
 
 // Limits returns the limits this registry enforces. They are fixed at
@@ -79,7 +91,11 @@ func (reg *Registry) Ensure(id int) (*Test, error) {
 		return nil, err
 	}
 
-	created := &Test{Created: time.Now().UTC(), limits: reg.limits}
+	created := &Test{
+		Created: time.Now().UTC(),
+		limits:  reg.limits,
+		log:     reg.log.With("test_id", id),
+	}
 	reg.tests[id] = created
 
 	return created, nil

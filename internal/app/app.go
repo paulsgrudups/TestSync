@@ -11,6 +11,8 @@
 package app
 
 import (
+	"log/slog"
+
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
 	"github.com/paulsgrudups/testsync/storage"
@@ -37,19 +39,35 @@ type App struct {
 	// Auth is the single validator both the HTTP and the WebSocket server
 	// authenticate through, so the two paths cannot drift apart (SEC-1).
 	Auth *auth.Validator
+
+	// Log is this server's logger. Components derive their own from it with
+	// [slog.Logger.With], so a line about a barrier already names the run it
+	// belongs to (CODE-6).
+	Log *slog.Logger
 }
 
-// New builds an application from its three external dependencies: the
-// operator's configuration, the opened data store, and the credential
-// validator. The registry and the service are derived from them.
-func New(conf utils.Config, store storage.DataStore, validator *auth.Validator) *App {
-	registry := runs.NewRegistry(runs.LimitsFromConfig(conf.Limits))
+// New builds an application from its external dependencies: the operator's
+// configuration, the opened data store, the credential validator and the
+// process logger. The registry and the service are derived from them. A nil
+// logger discards, so a test that does not care about output says nothing.
+func New(
+	conf utils.Config,
+	store storage.DataStore,
+	validator *auth.Validator,
+	logger *slog.Logger,
+) *App {
+	if logger == nil {
+		logger = utils.DiscardLogger()
+	}
+
+	registry := runs.NewRegistry(runs.LimitsFromConfig(conf.Limits), logger)
 
 	return &App{
 		Config:   conf,
 		Store:    store,
 		Registry: registry,
-		Service:  runs.NewService(store, registry),
+		Service:  runs.NewService(store, registry, logger),
 		Auth:     validator,
+		Log:      logger,
 	}
 }

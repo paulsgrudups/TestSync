@@ -2,12 +2,11 @@
 package runs
 
 import (
+	"log/slog"
 	"maps"
 	"slices"
 	"sync"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
@@ -100,16 +99,22 @@ type checkpoint struct {
 	// timer ends the round when its deadline passes. It exists only while a
 	// round has members.
 	timer *time.Timer
+
+	// log already carries the run's test_id and this barrier's identifier.
+	log *slog.Logger
 }
 
 // newCheckpoint creates a barrier on a test. Its first round is sized by the
 // first agent that joins it.
 func newCheckpoint(t *Test, identifier string) *checkpoint {
-	log.Infof("Creating new checkpoint %q", identifier)
+	logger := t.logger().With("checkpoint", identifier)
+
+	logger.Info("created a checkpoint")
 
 	return &checkpoint{
 		identifier: identifier,
 		test:       t,
+		log:        logger,
 		generation: 1,
 		members:    make(map[ConnID]struct{}),
 	}
@@ -146,8 +151,8 @@ func (cp *checkpoint) join(connID ConnID, target int, timeout time.Duration) *re
 		cp.startTimerLocked(timeout)
 	}
 
-	log.Debugf(
-		"Adding connection to checkpoint %q round %d", cp.identifier, cp.generation,
+	cp.log.Debug("agent joined a checkpoint round",
+		"conn_id", connID, "generation", cp.generation,
 	)
 
 	// A set, not a slice: one connection joining twice is still one agent.
@@ -157,7 +162,9 @@ func (cp *checkpoint) join(connID ConnID, target int, timeout time.Duration) *re
 		return nil
 	}
 
-	log.Debug("Connection target reached - broadcasting")
+	cp.log.Debug("checkpoint target reached, releasing",
+		"generation", cp.generation, "target", cp.targetCount,
+	)
 
 	return cp.endRoundLocked(ReasonComplete)
 }
@@ -186,9 +193,8 @@ func (cp *checkpoint) leave(connID ConnID, remaining int) *release {
 		return nil
 	}
 
-	log.Warnf(
-		"Checkpoint %q lost a participant: %d of %d agents remain connected",
-		cp.identifier, remaining, cp.targetCount,
+	cp.log.Warn("checkpoint lost a participant",
+		"remaining", remaining, "target", cp.targetCount,
 	)
 
 	return cp.endRoundLocked(ReasonParticipantLost)
@@ -198,7 +204,7 @@ func (cp *checkpoint) leave(connID ConnID, remaining int) *release {
 // the timer was started for, so a timer that fires while it is being stopped
 // cannot end the round that follows.
 func (cp *checkpoint) expire(generation int) {
-	defer utils.RecoverGoroutine("checkpoint deadline")
+	defer utils.RecoverGoroutine(cp.log, "checkpoint deadline")
 
 	cp.mu.Lock()
 
@@ -211,9 +217,8 @@ func (cp *checkpoint) expire(generation int) {
 
 	cp.mu.Unlock()
 
-	log.Warnf(
-		"Checkpoint %q timed out with %d of %d agents",
-		cp.identifier, released.joined, released.target,
+	cp.log.Warn("checkpoint round timed out",
+		"joined", released.joined, "target", released.target,
 	)
 
 	cp.broadcastStatus(released)
@@ -290,10 +295,7 @@ func (cp *checkpoint) broadcastStatus(released *release) {
 			},
 		)
 		if err != nil {
-			log.Errorf(
-				"Could not broadcast message to checkpoint %q: %s",
-				cp.identifier, err.Error(),
-			)
+			cp.log.Error("could not deliver a checkpoint release", "error", err)
 		}
 	}
 }

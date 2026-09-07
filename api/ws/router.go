@@ -1,7 +1,9 @@
 package ws
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,8 +14,6 @@ import (
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // envelopeAllowance is the room a frame gets on top of limits.max_data_bytes
@@ -57,11 +57,13 @@ func newWSRouter(s *Server) http.Handler {
 	router := mux.NewRouter().StrictSlash(true)
 
 	// A panic must cost at most one connection, never the process.
-	router.Use(utils.RecoverPanics)
+	router.Use(utils.RecoverPanics(s.log()))
 
-	router.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := fmt.Fprintln(w, "WebSocket, reporting for duty!"); err != nil {
-			log.Debugf("failed to write ws root response: %v", err)
+			s.log().DebugContext(
+				r.Context(), "failed to write the websocket root response", "error", err,
+			)
 		}
 	})
 
@@ -80,7 +82,7 @@ func (s *Server) register(r *mux.Router) {
 }
 
 func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
-	if !isUserAuthorized(w, r, s.app.Auth) {
+	if !isUserAuthorized(w, r, s.app.Auth, s.log()) {
 		return
 	}
 
@@ -89,7 +91,7 @@ func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
 	// upgraded and then abandoned is a leaked socket with no reader (CONC-11).
 	testID, err := parseTestID(r)
 	if err != nil {
-		log.Debugf("Rejecting WebSocket registration: %s", err.Error())
+		s.log().DebugContext(r.Context(), "rejecting a websocket registration", "error", err)
 		utils.HTTPError(w, "Unable to parse testID as int", http.StatusBadRequest)
 
 		return
@@ -99,7 +101,9 @@ func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
 	// an HTTP status, before the socket is upgraded and an error can only be
 	// delivered as a close frame (STAB-3).
 	if admitErr := s.app.Registry.CanAdmit(testID); admitErr != nil {
-		log.Warnf("Rejecting WebSocket registration: %s", admitErr.Error())
+		s.log().WarnContext(
+			r.Context(), "rejecting a websocket registration", "error", admitErr,
+		)
 		utils.HTTPError(
 			w,
 			"Too many active test runs; retry once running suites finish",
@@ -111,33 +115,48 @@ func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Errorf("Failed to upgrade connection: %s", err.Error())
+		s.log().ErrorContext(r.Context(), "failed to upgrade a connection", "error", err)
 		return
 	}
 
-	log.Info("Connection established to WebSocket")
+	s.log().InfoContext(r.Context(), "websocket connection established", "test_id", testID)
 
 	// The connection now belongs to the reader, which closes it on every exit
 	// path, panics included.
-	go s.reader(conn, testID)
+	//
+	// WithoutCancel, because net/http cancels a request's context the moment
+	// ServeHTTP returns — measured, and true of a hijacked connection too — so
+	// handing r.Context() to a connection that outlives the request would
+	// cancel every store query it ever makes. The values are kept; only the
+	// cancellation that no longer applies is dropped.
+	go s.reader(context.WithoutCancel(r.Context()), conn, testID)
 }
 
-func (s *Server) reader(conn *websocket.Conn, testID int) {
+func (s *Server) reader(parent context.Context, conn *websocket.Conn, testID int) {
 	// Deferred first so that it runs last: the connection is already closed by
 	// the time the panic is logged.
-	defer utils.RecoverGoroutine("websocket reader")
+	logger := s.log().With("test_id", testID)
+
+	defer utils.RecoverGoroutine(logger, "websocket reader")
+
+	// The connection's own context, cancelled when its reader exits, so a
+	// store query started for an agent stops when that agent goes away while
+	// shutdown stays free to drain in-flight work rather than abort it
+	// (STAB-6, STAB-10).
+	ctx, cancelConn := context.WithCancel(parent)
+	defer cancelConn()
 
 	// The client owns every write to this connection, including keepalive
 	// pings: gorilla/websocket panics on concurrent writers, and a checkpoint
 	// release is written by whichever agent completed the barrier.
-	client := wsutil.NewClient(conn)
+	client := wsutil.NewClient(conn, logger)
 	go client.WritePump()
 
 	defer func() {
 		client.Close()
 
 		if err := conn.Close(); err != nil {
-			log.Debugf("failed to close websocket connection: %v", err)
+			logger.DebugContext(ctx, "failed to close the websocket connection", "error", err)
 		}
 	}()
 
@@ -151,7 +170,7 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 	conn.SetReadLimit(s.maxMessageBytes())
 
 	if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
-		log.Errorf("Failed to set read deadline: %s", err.Error())
+		logger.ErrorContext(ctx, "failed to set the read deadline", "error", err)
 		return
 	}
 
@@ -159,12 +178,12 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	r, err := s.app.Registry.Ensure(testID)
+	run, err := s.app.Registry.Ensure(testID)
 	if err != nil {
 		// The socket is already upgraded, so the rejection is a close frame
 		// rather than an HTTP status. 1013 (try again later) says the agent
 		// may retry, which is true of both limits below.
-		log.Warnf("Rejecting connection for test %d: %s", testID, err.Error())
+		logger.WarnContext(ctx, "rejecting a connection", "error", err)
 		rejectConnection(client, "too many active test runs")
 
 		return
@@ -174,39 +193,34 @@ func (s *Server) reader(conn *websocket.Conn, testID int) {
 	// However the goroutine exits, panics included, the connection stops being
 	// counted and gives up its slot in every barrier it joined, instead of
 	// holding the other agents there (CONC-5, CONC-6).
-	connID, err := r.AddConnection(client)
+	connID, err := run.AddConnection(client)
 	if err != nil {
-		log.Warnf("Rejecting connection for test %d: %s", testID, err.Error())
+		logger.WarnContext(ctx, "rejecting a connection", "error", err)
 		rejectConnection(client, "connection limit reached for this test run")
 
 		return
 	}
 
-	defer r.RemoveConnection(connID)
+	defer run.RemoveConnection(connID)
+
+	logger = logger.With("conn_id", connID)
 
 	for {
 		messageType, p, err := conn.ReadMessage()
 		if err != nil {
 			if messageType != -1 {
-				log.Errorf(
-					"Failed to read message for %d test: %s",
-					testID, err.Error(),
-				)
+				logger.ErrorContext(ctx, "failed to read a message", "error", err)
 			} else {
-				log.Infof(
-					"WS connection closed for %d test: %s",
-					testID, err.Error(),
-				)
+				logger.InfoContext(ctx, "websocket connection closed", "reason", err.Error())
 			}
 
 			return
 		}
 
-		log.Infof("Received message: %s", string(p))
+		logger.DebugContext(ctx, "received a message", "bytes", len(p))
 
-		err = s.Handler.Handle(testID, connID, p, r)
-		if err != nil {
-			log.Errorf("Failed to process message: %s", err.Error())
+		if err = s.Handler.Handle(ctx, testID, connID, p, run); err != nil {
+			logger.ErrorContext(ctx, "failed to process a message", "error", err)
 		}
 	}
 }
@@ -243,7 +257,10 @@ func parseTestID(r *http.Request) (int, error) {
 // headers. The validator is the same one the HTTP server holds, carried on the
 // App, so the two paths cannot disagree about who is allowed in (SEC-1), and a
 // validator that was never configured denies rather than opens.
-func isUserAuthorized(w http.ResponseWriter, r *http.Request, validator *auth.Validator) bool {
+func isUserAuthorized(
+	w http.ResponseWriter, r *http.Request,
+	validator *auth.Validator, logger *slog.Logger,
+) bool {
 	if validator.Disabled() {
 		return true
 	}
@@ -257,21 +274,21 @@ func isUserAuthorized(w http.ResponseWriter, r *http.Request, validator *auth.Va
 		pass = r.URL.Query().Get("password")
 
 		if user == "" && pass == "" {
-			log.Debug("Could not get basic auth")
+			logger.DebugContext(r.Context(), "no credentials on a websocket registration")
 			utils.HTTPError(w, "Request not authorized", http.StatusUnauthorized)
 
 			return false
 		}
 
-		log.Warn(
-			"Deprecated: WebSocket credentials were supplied as query " +
-				"parameters, which leak into proxy and access logs. Use the " +
+		logger.WarnContext(r.Context(),
+			"deprecated: WebSocket credentials were supplied as query "+
+				"parameters, which leak into proxy and access logs. Use the "+
 				"Authorization header instead.",
 		)
 	}
 
 	if !validator.Validate(user, pass) {
-		log.Debug("Could not validate user, invalid credentials")
+		logger.DebugContext(r.Context(), "invalid websocket credentials")
 		utils.HTTPError(w, "Request not authorized", http.StatusUnauthorized)
 
 		return false

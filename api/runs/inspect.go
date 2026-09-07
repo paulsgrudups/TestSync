@@ -55,21 +55,15 @@ type CheckpointState struct {
 	Waiting bool
 }
 
-// TestState is a point-in-time, read-only view of one test run. It reports
-// sizes and counts only: stored test data can hold anything a caller put in
-// it and is deliberately never copied out of the run.
+// TestState is a point-in-time, read-only view of one test run's coordination
+// state. It carries no test data and no size for it: payloads belong to the
+// store, and a caller that needs a size asks [Service] for one (CODE-3).
 type TestState struct {
 	// TestID is the run's identifier.
 	TestID int
 
 	// Created is when the run was first seen.
 	Created time.Time
-
-	// DataSize is the length in bytes of the data cached with the run.
-	DataSize int
-
-	// ForceEnd mirrors the run's force-end flag.
-	ForceEnd bool
 
 	// Connections holds the agents currently attached to the run.
 	Connections []ConnectionState
@@ -106,8 +100,6 @@ func (t *Test) State(testID int) TestState {
 	state := TestState{
 		TestID:      testID,
 		Created:     t.Created,
-		DataSize:    len(t.Data),
-		ForceEnd:    t.ForceEnd,
 		Connections: make([]ConnectionState, 0, len(t.connections)),
 		Checkpoints: make([]CheckpointState, 0, len(t.checkPoints)),
 	}

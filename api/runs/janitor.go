@@ -2,10 +2,9 @@ package runs
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 
 	"github.com/paulsgrudups/testsync/utils"
 )
@@ -33,6 +32,7 @@ type Janitor struct {
 	// its own registry without touching anyone else's (CODE-1).
 	registry *Registry
 	svc      *Service
+	log      *slog.Logger
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -44,8 +44,13 @@ type Janitor struct {
 // with their data in svc's store. Interval and retention values that are not
 // positive fall back to the defaults.
 func NewJanitor(
-	interval, retention time.Duration, registry *Registry, svc *Service,
+	interval, retention time.Duration,
+	registry *Registry, svc *Service, logger *slog.Logger,
 ) *Janitor {
+	if logger == nil {
+		logger = utils.DiscardLogger()
+	}
+
 	if interval <= 0 {
 		interval = utils.DefaultCleanupInterval
 	}
@@ -59,6 +64,7 @@ func NewJanitor(
 		retention: retention,
 		registry:  registry,
 		svc:       svc,
+		log:       logger,
 	}
 }
 
@@ -81,18 +87,18 @@ func (j *Janitor) Start(ctx context.Context) {
 	j.done = done
 
 	go func() {
-		defer utils.RecoverGoroutine("test cleanup")
+		defer utils.RecoverGoroutine(j.log, "test cleanup")
 		defer close(done)
 
 		ticker := time.NewTicker(j.interval)
 		defer ticker.Stop()
 
-		j.Sweep(time.Now())
+		j.Sweep(ctx, time.Now())
 
 		for {
 			select {
 			case now := <-ticker.C:
-				j.Sweep(now)
+				j.Sweep(ctx, now)
 			case <-ctx.Done():
 				return
 			}
@@ -124,7 +130,7 @@ func (j *Janitor) Stop() {
 //
 // Runs with connected agents are kept, and so is their stored data: a suite
 // that is still running must never have its state deleted underneath it.
-func (j *Janitor) Sweep(now time.Time) {
+func (j *Janitor) Sweep(ctx context.Context, now time.Time) {
 	limit := now.Add(-j.retention)
 
 	keep := make([]int, 0)
@@ -136,21 +142,20 @@ func (j *Janitor) Sweep(now time.Time) {
 		}
 
 		if count := t.ConnectionCount(); count > 0 {
-			log.WithFields(log.Fields{
-				"test_id":     testID,
-				"connections": count,
-			}).Debug("Keeping expired test with connected agents")
+			j.log.DebugContext(ctx, "keeping an expired run with connected agents",
+				"test_id", testID, "connections", count,
+			)
 
 			keep = append(keep, testID)
 
 			return
 		}
 
-		log.WithField("test_id", testID).Info("Deleting expired test")
+		j.log.InfoContext(ctx, "deleting an expired run", "test_id", testID)
 		j.registry.Delete(testID)
 	})
 
-	if err := j.svc.DeleteDataOlderThan(limit, keep); err != nil {
-		log.Errorf("Failed to delete old data: %s", err.Error())
+	if err := j.svc.DeleteDataOlderThan(ctx, limit, keep); err != nil {
+		j.log.ErrorContext(ctx, "failed to delete expired test data", "error", err)
 	}
 }

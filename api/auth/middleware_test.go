@@ -28,7 +28,7 @@ func okHandler() http.Handler {
 func TestBasicAuthMiddleware_Unauthorized(t *testing.T) {
 	t.Parallel()
 
-	handler := BasicAuthMiddleware(newTestValidator(t))(okHandler())
+	handler := BasicAuthMiddleware(newTestValidator(t), nil)(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -42,7 +42,7 @@ func TestBasicAuthMiddleware_Unauthorized(t *testing.T) {
 func TestBasicAuthMiddleware_Authorized(t *testing.T) {
 	t.Parallel()
 
-	handler := BasicAuthMiddleware(newTestValidator(t))(okHandler())
+	handler := BasicAuthMiddleware(newTestValidator(t), nil)(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.SetBasicAuth("user", "pass")
@@ -59,7 +59,7 @@ func TestBasicAuthMiddleware_Authorized(t *testing.T) {
 func TestBasicAuthMiddleware_WrongCredentials(t *testing.T) {
 	t.Parallel()
 
-	handler := BasicAuthMiddleware(newTestValidator(t))(okHandler())
+	handler := BasicAuthMiddleware(newTestValidator(t), nil)(okHandler())
 
 	cases := []struct {
 		name string
@@ -90,7 +90,7 @@ func TestBasicAuthMiddleware_WrongCredentials(t *testing.T) {
 func TestBasicAuthMiddleware_NilValidator(t *testing.T) {
 	t.Parallel()
 
-	handler := BasicAuthMiddleware(nil)(okHandler())
+	handler := BasicAuthMiddleware(nil, nil)(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.SetBasicAuth("user", "pass")
@@ -106,7 +106,7 @@ func TestBasicAuthMiddleware_NilValidator(t *testing.T) {
 func TestBasicAuthMiddleware_Disabled(t *testing.T) {
 	t.Parallel()
 
-	handler := BasicAuthMiddleware(NewDisabledValidator())(okHandler())
+	handler := BasicAuthMiddleware(NewDisabledValidator(), nil)(okHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -122,7 +122,7 @@ func TestBasicAuthMiddleware_Disabled(t *testing.T) {
 func TestBasicAuthMiddleware_Configured(t *testing.T) {
 	t.Parallel()
 
-	handler := BasicAuthMiddleware(newTestValidator(t))(okHandler())
+	handler := BasicAuthMiddleware(newTestValidator(t), nil)(okHandler())
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))

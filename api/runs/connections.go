@@ -7,8 +7,6 @@ import (
 	"slices"
 	"sync/atomic"
 
-	log "github.com/sirupsen/logrus"
-
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
@@ -84,7 +82,7 @@ func (t *Test) RemoveConnection(id ConnID) {
 
 	t.mu.Unlock()
 
-	log.Debugf("Removed connection %d, %d remaining", id, remaining)
+	t.logger().Debug("removed a connection", "conn_id", id, "remaining", remaining)
 
 	// Neither t.mu nor cp.mu is held here: ending a round writes to the
 	// surviving connections, and no lock may be held across a write.

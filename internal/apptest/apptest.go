@@ -78,5 +78,8 @@ func WithValidator(
 ) *app.App {
 	t.Helper()
 
-	return app.New(conf, storagetest.NewStore(t), validator)
+	// Discarding by default: these suites open hundreds of connections and are
+	// meant to be run with -count=20, which per-message logging makes
+	// unreadable. A test that asserts on output builds its own logger.
+	return app.New(conf, storagetest.NewStore(t), validator, utils.DiscardLogger())
 }

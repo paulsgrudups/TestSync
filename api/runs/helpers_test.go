@@ -16,9 +16,9 @@ import (
 func newTestSetup(t *testing.T, limits Limits) (*Registry, *Service) {
 	t.Helper()
 
-	registry := NewRegistry(limits)
+	registry := NewRegistry(limits, nil)
 
-	return registry, NewService(storagetest.NewStore(t), registry)
+	return registry, NewService(storagetest.NewStore(t), registry, nil)
 }
 
 // newRun registers a run with a chosen creation time. Registry.Ensure stamps

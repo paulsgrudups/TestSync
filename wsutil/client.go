@@ -2,14 +2,14 @@
 package wsutil
 
 import (
-	stderrors "errors"
+	"errors"
+	"fmt"
+	"log/slog"
 	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-
-	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -34,13 +34,13 @@ const (
 
 var (
 	// ErrClientClosed indicates the connection is no longer writable.
-	ErrClientClosed = stderrors.New("websocket connection closed")
+	ErrClientClosed = errors.New("websocket connection closed")
 
 	// ErrClientBacklog indicates the connection's outbound queue is full, so
 	// the connection has been closed. A client that cannot drain a checkpoint
 	// release is of no use to the agents waiting on it, and must never be
 	// allowed to block them.
-	ErrClientBacklog = stderrors.New("websocket outbound queue is full")
+	ErrClientBacklog = errors.New("websocket outbound queue is full")
 )
 
 type outbound struct {
@@ -69,16 +69,27 @@ type Client struct {
 	closeReason string
 
 	closeOnce sync.Once
+
+	// log is the owner's logger. Every message here is about this one
+	// connection, so it carries whatever fields the owner set on it.
+	log *slog.Logger
 }
 
-// NewClient wraps a connection. The caller must start WritePump exactly once,
-// in its own goroutine, before any message is sent.
-func NewClient(conn *websocket.Conn) *Client {
+// NewClient wraps a connection, logging through the caller's logger so that
+// every line about a connection carries the fields its owner set. A nil logger
+// discards. The caller must start WritePump exactly once, in its own
+// goroutine, before any message is sent.
+func NewClient(conn *websocket.Conn, logger *slog.Logger) *Client {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
 	return &Client{
 		conn:     conn,
 		out:      make(chan outbound, outboundBuffer),
 		done:     make(chan struct{}),
 		finished: make(chan struct{}),
+		log:      logger,
 	}
 }
 
@@ -158,8 +169,9 @@ func (c *Client) Finished() <-chan struct{} {
 func (c *Client) WritePump() {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf(
-				"Recovered panic in WebSocket writer: %v\n%s", r, debug.Stack(),
+			c.log.Error("recovered panic in the WebSocket writer",
+				"panic", fmt.Sprint(r),
+				"stack", string(debug.Stack()),
 			)
 		}
 	}()
@@ -172,7 +184,7 @@ func (c *Client) WritePump() {
 		c.writeCloseFrame()
 
 		if err := c.conn.Close(); err != nil {
-			log.Debugf("failed to close underlying websocket connection: %v", err)
+			c.log.Debug("failed to close the underlying websocket connection", "error", err)
 		}
 
 		close(c.finished)
@@ -182,7 +194,7 @@ func (c *Client) WritePump() {
 		select {
 		case msg := <-c.out:
 			if err := c.write(msg.messageType, msg.data); err != nil {
-				log.Debugf("Could not send WS message: %s", err.Error())
+				c.log.Debug("could not send a websocket message", "error", err)
 				return
 			}
 		case <-ping.C:
@@ -192,7 +204,7 @@ func (c *Client) WritePump() {
 				time.Now().Add(writeWait),
 			)
 			if err != nil {
-				log.Debugf("Could not send WS ping message: %s", err.Error())
+				c.log.Debug("could not send a websocket ping", "error", err)
 				return
 			}
 		case <-c.done:
@@ -216,7 +228,7 @@ func (c *Client) writeCloseFrame() {
 		time.Now().Add(writeWait),
 	)
 	if err != nil {
-		log.Debugf("Could not send WS close frame: %s", err.Error())
+		c.log.Debug("could not send a websocket close frame", "error", err)
 	}
 }
 

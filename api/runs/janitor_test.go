@@ -19,7 +19,7 @@ func newJanitorTest(
 
 	registry, service := newTestSetup(t, DefaultLimits())
 
-	return registry, service, NewJanitor(interval, retention, registry, service)
+	return registry, service, NewJanitor(interval, retention, registry, service, nil)
 }
 
 // TestJanitorKeepsRunsWithConnectedAgents is the STAB-4 regression test.
@@ -43,23 +43,23 @@ func TestJanitorKeepsRunsWithConnectedAgents(t *testing.T) {
 
 	busyRun := newRun(t, registry, busy, expired)
 
-	if _, err := busyRun.AddConnection(wsutil.NewClient(nil)); err != nil {
+	if _, err := busyRun.AddConnection(wsutil.NewClient(nil, nil)); err != nil {
 		t.Fatalf("failed to attach connection: %v", err)
 	}
 
 	newRun(t, registry, idle, expired)
 
-	if err := service.store.SaveData(busy, []byte("in use")); err != nil {
+	if err := service.store.SaveData(t.Context(), busy, []byte("in use")); err != nil {
 		t.Fatalf("failed to save data: %v", err)
 	}
 
-	janitor.Sweep(time.Now())
+	janitor.Sweep(t.Context(), time.Now())
 
 	if _, ok := registry.Get(busy); !ok {
 		t.Fatal("a run with a connected agent was deleted by the sweep")
 	}
 
-	if _, ok, err := service.store.LoadData(busy); err != nil || !ok {
+	if _, ok, err := service.store.LoadData(t.Context(), busy); err != nil || !ok {
 		t.Fatalf("the data of a run with a connected agent was deleted: ok=%v err=%v", ok, err)
 	}
 
@@ -77,7 +77,7 @@ func TestJanitorKeepsRunsInsideRetention(t *testing.T) {
 
 	newRun(t, registry, 3, time.Now())
 
-	janitor.Sweep(time.Now())
+	janitor.Sweep(t.Context(), time.Now())
 
 	if _, ok := registry.Get(3); !ok {
 		t.Fatal("a run inside its retention window was deleted")

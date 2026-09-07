@@ -4,6 +4,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -13,9 +14,6 @@ import (
 	"github.com/paulsgrudups/testsync/utils"
 
 	"github.com/gorilla/mux"
-	"github.com/pkg/errors"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // NewRouter builds the HTTP handler for one application. Everything it needs
@@ -25,14 +23,13 @@ import (
 func NewRouter(a *app.App) (http.Handler, error) {
 	router := mux.NewRouter().StrictSlash(false)
 
-	err := registerMiddlewares(router)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to register middlewares")
+	if err := registerMiddlewares(router, a.Log); err != nil {
+		return nil, fmt.Errorf("failed to register middlewares: %w", err)
 	}
 
-	router.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := fmt.Fprintln(w, "A random proverb that is very intellectual."); err != nil {
-			log.Debugf("failed to write root response: %v", err)
+			a.Log.DebugContext(r.Context(), "failed to write the root response", "error", err)
 		}
 	})
 
@@ -42,21 +39,21 @@ func NewRouter(a *app.App) (http.Handler, error) {
 		w.Write([]byte(`{"status":"ok"}`)) // nolint: gosec, errcheck
 	})
 
-	runs.RegisterTestsRoutes(router, a.Service, a.Auth)
+	runs.RegisterTestsRoutes(router, a.Service, a.Auth, a.Log)
 
 	// Read-only monitoring API and operator page, behind the same validator.
-	monitor.RegisterRoutes(router, a.Registry, a.Auth)
+	monitor.RegisterRoutes(router, a)
 
 	return router, nil
 }
 
-func registerMiddlewares(r *mux.Router) error {
+func registerMiddlewares(r *mux.Router, logger *slog.Logger) error {
 	body, err := json.Marshal(utils.ErrorResponse{
 		Code:  http.StatusServiceUnavailable,
 		Error: "Request timed out",
 	})
 	if err != nil {
-		return errors.Wrap(err, "failed to marshal timeout body")
+		return fmt.Errorf("failed to marshal the timeout body: %w", err)
 	}
 
 	timeoutMW := func(next http.Handler) http.Handler {
@@ -65,9 +62,9 @@ func registerMiddlewares(r *mux.Router) error {
 
 	// Outermost, so that it also catches the panic http.TimeoutHandler
 	// re-raises in this goroutine after its own handler goroutine panicked.
-	r.Use(utils.RecoverPanics)
+	r.Use(utils.RecoverPanics(logger))
 	r.Use(timeoutMW)
-	r.Use(utils.LogRequests)
+	r.Use(utils.LogRequests(logger))
 
 	return nil
 }

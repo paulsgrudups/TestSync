@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -256,15 +257,27 @@ func TestReaderRejectsOversizedFrame(t *testing.T) {
 // any bug that panics inside a command handler.
 type panickingStore struct{}
 
-func (panickingStore) SaveData(_ int, _ []byte) error { return nil }
+func (panickingStore) SaveData(_ context.Context, _ int, _ []byte) error { return nil }
 
-func (panickingStore) LoadData(_ int) ([]byte, bool, error) {
+func (panickingStore) LoadData(_ context.Context, _ int) ([]byte, bool, error) {
 	panic("boom: injected panic in a command handler")
 }
 
-func (panickingStore) DeleteData(_ int) error { return nil }
+func (panickingStore) DeleteData(_ context.Context, _ int) error { return nil }
 
-func (panickingStore) DeleteOlderThanExcept(_ time.Time, _ []int) error { return nil }
+func (panickingStore) DeleteOlderThanExcept(
+	_ context.Context, _ time.Time, _ []int,
+) error {
+	return nil
+}
+
+func (panickingStore) DataSize(_ context.Context, _ int) (int, bool, error) {
+	return 0, false, nil
+}
+
+func (panickingStore) DataSizes(_ context.Context) (map[int]int, error) {
+	return map[int]int{}, nil
+}
 
 func (panickingStore) Close() error { return nil }
 
@@ -279,7 +292,7 @@ func TestPanicInHandlerKillsOnlyOneConnection(t *testing.T) {
 	application := apptest.NewInsecure(t)
 	ws := &Server{
 		Handler: NewCommandHandler(
-			runs.NewService(panickingStore{}, application.Registry),
+			runs.NewService(panickingStore{}, application.Registry, nil), nil,
 		),
 		app: application,
 	}

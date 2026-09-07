@@ -3,42 +3,36 @@ package main
 import (
 	"bytes"
 	"errors"
-	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/utils"
-
-	log "github.com/sirupsen/logrus"
 )
 
-// captureLog redirects the global logger for the duration of a test.
-func captureLog(t *testing.T) *bytes.Buffer {
+// captureLog returns a logger writing into a buffer the test can assert on,
+// at WARN so that the startup banner is the only thing in it.
+func captureLog(t *testing.T) (*slog.Logger, *bytes.Buffer) {
 	t.Helper()
 
 	buf := &bytes.Buffer{}
-	previousLevel := log.GetLevel()
 
-	log.SetOutput(buf)
-	log.SetLevel(log.WarnLevel)
+	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
+		Level: slog.LevelWarn,
+	}))
 
-	t.Cleanup(func() {
-		log.SetOutput(io.Discard)
-		log.SetLevel(previousLevel)
-	})
-
-	return buf
+	return logger, buf
 }
 
 // TestSetupAuthRequiresCredentials covers SEC-1: startup with no credentials
 // and no explicit opt-out is a fatal error, not a silently open server.
 func TestSetupAuthRequiresCredentials(t *testing.T) {
-	captureLog(t)
+	logger, _ := captureLog(t)
 
 	conf := utils.Config{}
 	utils.ApplyDefaults(&conf)
 
-	validator, err := setupAuth(conf, false)
+	validator, err := setupAuth(conf, false, logger)
 	if !errors.Is(err, auth.ErrNoCredentials) {
 		t.Fatalf("expected ErrNoCredentials, got %v", err)
 	}
@@ -51,14 +45,14 @@ func TestSetupAuthRequiresCredentials(t *testing.T) {
 // TestSetupAuthBuildsValidator covers the configured case: one validator is
 // built for the App, and both the HTTP and the WebSocket path use it.
 func TestSetupAuthBuildsValidator(t *testing.T) {
-	captureLog(t)
+	logger, _ := captureLog(t)
 
 	conf := utils.Config{
 		SyncClient: utils.BasicCredentials{Username: "user", Password: "pass"},
 	}
 	utils.ApplyDefaults(&conf)
 
-	validator, err := setupAuth(conf, false)
+	validator, err := setupAuth(conf, false, logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,12 +86,12 @@ func TestSetupAuthOptOutWarns(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			logs := captureLog(t)
+			logger, logs := captureLog(t)
 
 			conf := tc.conf
 			utils.ApplyDefaults(&conf)
 
-			validator, err := setupAuth(conf, tc.insecure)
+			validator, err := setupAuth(conf, tc.insecure, logger)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -114,7 +108,7 @@ func TestSetupAuthOptOutWarns(t *testing.T) {
 				t.Fatalf("expected a warning banner, got: %s", logs.String())
 			}
 
-			if !bytes.Contains(logs.Bytes(), []byte("level=warning")) {
+			if !bytes.Contains(logs.Bytes(), []byte("level=WARN")) {
 				t.Fatalf("expected the banner to be logged at WARN, got: %s", logs.String())
 			}
 		})
@@ -124,14 +118,14 @@ func TestSetupAuthOptOutWarns(t *testing.T) {
 // TestSetupAuthUnknownMode covers a typo in the auth mode: it must fail loudly
 // rather than fall back to something permissive.
 func TestSetupAuthUnknownMode(t *testing.T) {
-	captureLog(t)
+	logger, _ := captureLog(t)
 
 	conf := utils.Config{
 		Auth:       utils.AuthConfig{Mode: "off"},
 		SyncClient: utils.BasicCredentials{Username: "user", Password: "pass"},
 	}
 
-	validator, err := setupAuth(conf, false)
+	validator, err := setupAuth(conf, false, logger)
 	if !errors.Is(err, auth.ErrUnknownAuthMode) {
 		t.Fatalf("expected ErrUnknownAuthMode, got %v", err)
 	}

@@ -2,16 +2,17 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	sqlite "modernc.org/sqlite"
 )
 
@@ -33,14 +34,26 @@ type SQLiteStore struct {
 // not exist. Missing parent directories are created. If an existing file is
 // present but unusable as a database, it is moved aside and a fresh database
 // is created in its place so that a corrupted file never blocks startup.
-func NewSQLiteStore(path string) (*SQLiteStore, error) {
+//
+// The logger is used for exactly one message, the one that says a database was
+// moved aside. It is a parameter rather than the slog default because an
+// operator who lost a database must find that line in the same place, at the
+// same level and in the same format as everything else the server logged. A
+// nil logger discards.
+func NewSQLiteStore(
+	ctx context.Context, path string, logger *slog.Logger,
+) (*SQLiteStore, error) {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("could not create sqlite directory %q: %w", dir, err)
 		}
 	}
 
-	store, err := openSQLite(path)
+	store, err := openSQLite(ctx, path)
 	if err == nil {
 		return store, nil
 	}
@@ -57,9 +70,11 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	}
 
 	backup := fmt.Sprintf("%s.corrupt-%d", path, time.Now().UnixMilli())
-	log.Warnf(
-		"Existing sqlite database %q is corrupt (%s); moving it to %q and creating a new one",
-		path, err, backup,
+	logger.WarnContext(ctx,
+		"existing sqlite database is corrupt; moving it aside and creating a new one",
+		"path", path,
+		"backup", backup,
+		"error", err,
 	)
 
 	// Move the sidecar files alongside the database. The write-ahead log can
@@ -77,7 +92,7 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		}
 	}
 
-	return openSQLite(path)
+	return openSQLite(ctx, path)
 }
 
 // isCorruptErr reports whether err means the file is not a usable database.
@@ -98,7 +113,7 @@ func isCorruptErr(err error) bool {
 }
 
 // openSQLite opens path and ensures the schema is present.
-func openSQLite(path string) (*SQLiteStore, error) {
+func openSQLite(ctx context.Context, path string) (*SQLiteStore, error) {
 	// WAL keeps readers from blocking the writer, and a busy timeout lets
 	// concurrent agents wait for the write lock instead of failing outright.
 	// The path is escaped because the driver parses the DSN as a URI, where
@@ -115,12 +130,12 @@ func openSQLite(path string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("could not open sqlite database %q: %w", path, err)
 	}
 
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("could not reach sqlite database %q: %w", path, err)
 	}
 
-	if _, err := db.Exec(`
+	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS test_data (
 			test_id INTEGER PRIMARY KEY,
 			data BLOB,
@@ -129,6 +144,19 @@ func openSQLite(path string) (*SQLiteStore, error) {
 	`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("could not create schema in sqlite database %q: %w", path, err)
+	}
+
+	// The janitor's only query selects by age, and without this it was a full
+	// table scan on every sweep: at ten thousand rows, the configured default
+	// maximum, that is 3.5 ms of scanning against 18 µs of indexed search.
+	// IF NOT EXISTS so that a database written by an older build gains the
+	// index the first time this one opens it.
+	if _, err := db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_test_data_created_at
+			ON test_data(created_at)
+	`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("could not create index in sqlite database %q: %w", path, err)
 	}
 
 	return &SQLiteStore{db: db, path: path}, nil
@@ -140,8 +168,9 @@ func (s *SQLiteStore) Path() string {
 }
 
 // SaveData stores or updates the blob for the given test ID.
-func (s *SQLiteStore) SaveData(testID int, data []byte) error {
-	_, err := s.db.Exec(
+func (s *SQLiteStore) SaveData(ctx context.Context, testID int, data []byte) error {
+	_, err := s.db.ExecContext(
+		ctx,
 		`INSERT INTO test_data (test_id, data, created_at)
 		 VALUES (?, ?, ?)
 		 ON CONFLICT(test_id) DO UPDATE SET data=excluded.data, created_at=excluded.created_at`,
@@ -154,8 +183,10 @@ func (s *SQLiteStore) SaveData(testID int, data []byte) error {
 
 // LoadData returns stored data for a test ID. The boolean indicates whether
 // the row existed.
-func (s *SQLiteStore) LoadData(testID int) ([]byte, bool, error) {
-	row := s.db.QueryRow(`SELECT data FROM test_data WHERE test_id = ?`, testID)
+func (s *SQLiteStore) LoadData(ctx context.Context, testID int) ([]byte, bool, error) {
+	row := s.db.QueryRowContext(
+		ctx, `SELECT data FROM test_data WHERE test_id = ?`, testID,
+	)
 	var data []byte
 	if err := row.Scan(&data); err != nil {
 		if err == sql.ErrNoRows {
@@ -167,9 +198,63 @@ func (s *SQLiteStore) LoadData(testID int) ([]byte, bool, error) {
 	return data, true, nil
 }
 
+// DataSize returns the size in bytes of the stored payload for a test ID. The
+// boolean indicates whether the row existed. length() is answered from the
+// blob header, so the payload itself is never read.
+func (s *SQLiteStore) DataSize(ctx context.Context, testID int) (int, bool, error) {
+	row := s.db.QueryRowContext(
+		ctx, `SELECT length(data) FROM test_data WHERE test_id = ?`, testID,
+	)
+
+	var size sql.NullInt64
+	if err := row.Scan(&size); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+
+		return 0, false, err
+	}
+
+	return int(size.Int64), true, nil
+}
+
+// DataSizes returns the size of every stored payload, keyed by test ID.
+func (s *SQLiteStore) DataSizes(ctx context.Context) (map[int]int, error) {
+	rows, err := s.db.QueryContext(
+		ctx, `SELECT test_id, length(data) FROM test_data`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	sizes := make(map[int]int)
+
+	for rows.Next() {
+		var (
+			testID int
+			size   sql.NullInt64
+		)
+
+		if err := rows.Scan(&testID, &size); err != nil {
+			return nil, err
+		}
+
+		sizes[testID] = int(size.Int64)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return sizes, nil
+}
+
 // DeleteData removes data for the given test ID.
-func (s *SQLiteStore) DeleteData(testID int) error {
-	_, err := s.db.Exec(`DELETE FROM test_data WHERE test_id = ?`, testID)
+func (s *SQLiteStore) DeleteData(ctx context.Context, testID int) error {
+	_, err := s.db.ExecContext(
+		ctx, `DELETE FROM test_data WHERE test_id = ?`, testID,
+	)
 	return err
 }
 
@@ -179,7 +264,9 @@ func (s *SQLiteStore) DeleteData(testID int) error {
 //
 // keepIDs is bounded by the configured maximum number of runs, which is far
 // below sqlite's limit on bound parameters, and is empty on the common path.
-func (s *SQLiteStore) DeleteOlderThanExcept(limit time.Time, keepIDs []int) error {
+func (s *SQLiteStore) DeleteOlderThanExcept(
+	ctx context.Context, limit time.Time, keepIDs []int,
+) error {
 	args := make([]any, 0, len(keepIDs)+1)
 	args = append(args, limit.UnixMilli())
 
@@ -196,7 +283,7 @@ func (s *SQLiteStore) DeleteOlderThanExcept(limit time.Time, keepIDs []int) erro
 		}
 	}
 
-	_, err := s.db.Exec(query, args...)
+	_, err := s.db.ExecContext(ctx, query, args...)
 
 	return err
 }
