@@ -43,9 +43,23 @@ type Test struct {
 	// state and no lock beyond the run's own (CODE-1).
 	limits Limits
 
+	// leadTime is how far ahead a release tells the agents to resume. Like
+	// limits it is fixed by the registry that created the run.
+	leadTime time.Duration
+
 	// log already carries this run's test_id, so anything logged about the
 	// run or its barriers is attributable without repeating it.
 	log *slog.Logger
+}
+
+// releaseLeadTime returns the run's release lead time, or the default for a
+// Test that was built outside a registry.
+func (t *Test) releaseLeadTime() time.Duration {
+	if t.leadTime <= 0 {
+		return DefaultReleaseLeadTime
+	}
+
+	return t.leadTime
 }
 
 // logger returns the run's logger, or a discarding one for a Test that was

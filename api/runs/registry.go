@@ -26,6 +26,9 @@ type Registry struct {
 	// mutable state from a connection goroutine.
 	limits Limits
 
+	// leadTime is stamped into every run, like limits.
+	leadTime time.Duration
+
 	// log is stamped into every run this registry creates, so a line about a
 	// barrier can name the run it belongs to without the barrier having to
 	// reach back for a process-wide logger.
@@ -35,15 +38,39 @@ type Registry struct {
 	tests map[int]*Test
 }
 
+// RegistryOption adjusts a [Registry] at construction.
+type RegistryOption func(*Registry)
+
+// WithReleaseLeadTime sets how far ahead a checkpoint release tells the agents
+// to resume. Zero keeps [DefaultReleaseLeadTime].
+func WithReleaseLeadTime(d time.Duration) RegistryOption {
+	return func(reg *Registry) {
+		if d > 0 {
+			reg.leadTime = d
+		}
+	}
+}
+
 // NewRegistry creates an empty registry that enforces the given limits. Pass
 // [DefaultLimits] when the operator configured none: a registry whose limits
 // are the zero value enforces nothing at all. A nil logger discards.
-func NewRegistry(limits Limits, logger *slog.Logger) *Registry {
+func NewRegistry(limits Limits, logger *slog.Logger, opts ...RegistryOption) *Registry {
 	if logger == nil {
 		logger = utils.DiscardLogger()
 	}
 
-	return &Registry{limits: limits, log: logger, tests: make(map[int]*Test)}
+	reg := &Registry{
+		limits:   limits,
+		leadTime: DefaultReleaseLeadTime,
+		log:      logger,
+		tests:    make(map[int]*Test),
+	}
+
+	for _, opt := range opts {
+		opt(reg)
+	}
+
+	return reg
 }
 
 // Limits returns the limits this registry enforces. They are fixed at
@@ -51,6 +78,12 @@ func NewRegistry(limits Limits, logger *slog.Logger) *Registry {
 // that has already read it.
 func (reg *Registry) Limits() Limits {
 	return reg.limits
+}
+
+// ReleaseLeadTime returns how far ahead a release tells this registry's agents
+// to resume. Like the limits it is fixed at construction.
+func (reg *Registry) ReleaseLeadTime() time.Duration {
+	return reg.leadTime
 }
 
 // Get returns a run by ID, and whether it is registered.
@@ -92,9 +125,10 @@ func (reg *Registry) Ensure(id int) (*Test, error) {
 	}
 
 	created := &Test{
-		Created: time.Now().UTC(),
-		limits:  reg.limits,
-		log:     reg.log.With("test_id", id),
+		Created:  time.Now().UTC(),
+		limits:   reg.limits,
+		leadTime: reg.leadTime,
+		log:      reg.log.With("test_id", id),
 	}
 	reg.tests[id] = created
 

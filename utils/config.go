@@ -64,6 +64,17 @@ const (
 	DefaultRetention = 12 * time.Hour
 )
 
+// Bounds for the checkpoint release lead time (API-3).
+const (
+	// DefaultReleaseLeadTime is how far ahead a release tells the agents to
+	// resume, leaving every participant time to receive it first.
+	DefaultReleaseLeadTime = 500 * time.Millisecond
+
+	// MaxReleaseLeadTime is the longest lead time accepted. Beyond it a
+	// release is a stall rather than a synchronized start.
+	MaxReleaseLeadTime = 10 * time.Second
+)
+
 // Defaults for the resource limits that bound one server (STAB-3, SEC-8).
 // Every one of them is a rejection an operator can raise or lower; none of
 // them can be switched off, because an unbounded server is the thing they
@@ -96,6 +107,15 @@ type Config struct {
 	Storage    StorageConfig    `json:"storage"`
 	Cleanup    CleanupConfig    `json:"cleanup"`
 	Limits     LimitsConfig     `json:"limits"`
+	Checkpoint CheckpointConfig `json:"checkpoint"`
+}
+
+// CheckpointConfig tunes the checkpoint barriers.
+type CheckpointConfig struct {
+	// ReleaseLeadTime is how far ahead a release tells the agents to resume.
+	// Raise it when agents are far from the server and a release takes long
+	// to reach all of them. Defaults to 500ms; at most 10s.
+	ReleaseLeadTime Duration `json:"release_lead_time"`
 }
 
 // CleanupConfig defines how long finished test runs are kept and how often
@@ -227,6 +247,10 @@ func ApplyDefaults(conf *Config) {
 	if conf.Limits.MaxDataBytes == 0 {
 		conf.Limits.MaxDataBytes = DefaultMaxDataBytes
 	}
+
+	if conf.Checkpoint.ReleaseLeadTime == 0 {
+		conf.Checkpoint.ReleaseLeadTime = Duration(DefaultReleaseLeadTime)
+	}
 }
 
 // Validate reports the first setting the server cannot run with. It is
@@ -270,6 +294,14 @@ func Validate(conf *Config) error {
 				name, limits[name],
 			)
 		}
+	}
+
+	if lead := time.Duration(conf.Checkpoint.ReleaseLeadTime); lead < 0 || lead > MaxReleaseLeadTime {
+		return fmt.Errorf(
+			"checkpoint.release_lead_time is %s; it must be between 0s and %s, "+
+				"or omitted to use the default of %s",
+			lead, MaxReleaseLeadTime, DefaultReleaseLeadTime,
+		)
 	}
 
 	return nil

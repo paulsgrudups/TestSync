@@ -181,6 +181,7 @@ func (c *Client) WritePump() {
 	defer func() {
 		ping.Stop()
 		c.Close()
+		c.flushQueued()
 		c.writeCloseFrame()
 
 		if err := c.conn.Close(); err != nil {
@@ -208,6 +209,34 @@ func (c *Client) WritePump() {
 				return
 			}
 		case <-c.done:
+			return
+		}
+	}
+}
+
+// flushQueued writes what was queued before a graceful close, so that the
+// replies to commands a client sent before it asked to close still reach it.
+// It runs only for a close that carries a code - a client closed abruptly,
+// for falling behind or going silent, is exactly the peer not to wait on - and
+// one deadline bounds the whole flush, not each message, so a peer that stops
+// reading costs at most writeWait.
+func (c *Client) flushQueued() {
+	if c.closeCode == 0 {
+		return
+	}
+
+	if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return
+	}
+
+	for {
+		select {
+		case msg := <-c.out:
+			if err := c.conn.WriteMessage(msg.messageType, msg.data); err != nil {
+				c.log.Debug("could not flush a queued websocket message", "error", err)
+				return
+			}
+		default:
 			return
 		}
 	}

@@ -120,3 +120,30 @@ func TestRegistryRangeSeesEveryRun(t *testing.T) {
 		t.Fatalf("expected Range to see 3 runs, saw %d", len(seen))
 	}
 }
+
+// TestRegistryStampsTheReleaseLeadTime covers checkpoint.release_lead_time
+// reaching the runs: every run takes the lead time of the registry that
+// created it, and zero keeps the default.
+func TestRegistryStampsTheReleaseLeadTime(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		option time.Duration
+		want   time.Duration
+	}{
+		{option: 2 * time.Second, want: 2 * time.Second},
+		{option: 0, want: DefaultReleaseLeadTime},
+	} {
+		registry := NewRegistry(DefaultLimits(), nil, WithReleaseLeadTime(tc.option))
+
+		run, err := registry.Ensure(1)
+		if err != nil {
+			t.Fatalf("failed to create a run: %v", err)
+		}
+
+		if registry.ReleaseLeadTime() != tc.want || run.releaseLeadTime() != tc.want {
+			t.Fatalf("option %s: registry %s, run %s, want %s",
+				tc.option, registry.ReleaseLeadTime(), run.releaseLeadTime(), tc.want)
+		}
+	}
+}

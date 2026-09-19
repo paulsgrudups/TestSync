@@ -12,6 +12,7 @@ package app
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
@@ -60,7 +61,10 @@ func New(
 		logger = utils.DiscardLogger()
 	}
 
-	registry := runs.NewRegistry(runs.LimitsFromConfig(conf.Limits), logger)
+	registry := runs.NewRegistry(
+		runs.LimitsFromConfig(conf.Limits), logger,
+		runs.WithReleaseLeadTime(time.Duration(conf.Checkpoint.ReleaseLeadTime)),
+	)
 
 	return &App{
 		Config:   conf,

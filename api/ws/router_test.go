@@ -34,24 +34,30 @@ func TestWebSocketCommands(t *testing.T) {
 		t.Fatalf("update_data failed: %v", err)
 	}
 
+	if err = conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("failed to set read deadline: %v", err)
+	}
+	_, ack, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("update_data acknowledgement failed: %v", err)
+	}
+
+	if want := `{"command":"update_data","content":{"bytes":16}}`; string(ack) != want {
+		t.Fatalf("unexpected update_data acknowledgement: %s", ack)
+	}
+
 	if err = writeWS(conn, CommandReadData, map[string]string{}); err != nil {
 		t.Fatalf("read_data failed: %v", err)
 	}
 
-	if err = conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatalf("failed to set read deadline: %v", err)
-	}
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read_data response failed: %v", err)
 	}
 
-	expected, err := json.Marshal(updatePayload)
-	if err != nil {
-		t.Fatalf("failed to marshal expected payload: %v", err)
-	}
-	if string(msg) != string(expected) {
-		t.Fatalf("unexpected read_data payload: %q", string(msg))
+	// The payload comes back inside the envelope, as the JSON it was stored as.
+	if want := `{"command":"read_data","content":{"data":"value"}}`; string(msg) != want {
+		t.Fatalf("unexpected read_data reply: %s", msg)
 	}
 
 	if err = writeWS(conn, CommandGetConnectionCount, map[string]string{}); err != nil {

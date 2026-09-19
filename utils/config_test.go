@@ -181,3 +181,45 @@ func TestDurationUnmarshal(t *testing.T) {
 		})
 	}
 }
+
+// TestReleaseLeadTime covers checkpoint.release_lead_time: defaulted when
+// omitted, and refused at startup outside [0, MaxReleaseLeadTime] rather than
+// honoured, since a negative lead time schedules the start in the past and a
+// long one stalls every agent it releases.
+func TestReleaseLeadTime(t *testing.T) {
+	t.Parallel()
+
+	conf := Config{}
+	ApplyDefaults(&conf)
+
+	if conf.Checkpoint.ReleaseLeadTime.Duration() != DefaultReleaseLeadTime {
+		t.Fatalf("unexpected default lead time: %s", conf.Checkpoint.ReleaseLeadTime.Duration())
+	}
+
+	cases := []struct {
+		lead time.Duration
+		ok   bool
+	}{
+		{time.Millisecond, true},
+		{2 * time.Second, true},
+		{MaxReleaseLeadTime, true},
+		{-time.Millisecond, false},
+		{MaxReleaseLeadTime + time.Nanosecond, false},
+	}
+
+	for _, tc := range cases {
+		lead, ok := tc.lead, tc.ok
+		conf := Config{}
+		ApplyDefaults(&conf)
+		conf.Checkpoint.ReleaseLeadTime = Duration(lead)
+
+		err := Validate(&conf)
+		if ok && err != nil {
+			t.Errorf("%s: unexpected error: %v", lead, err)
+		}
+
+		if !ok && (err == nil || !strings.Contains(err.Error(), "checkpoint.release_lead_time")) {
+			t.Errorf("%s: expected a release_lead_time error, got %v", lead, err)
+		}
+	}
+}

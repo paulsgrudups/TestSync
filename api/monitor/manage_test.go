@@ -145,9 +145,11 @@ func TestReleaseCheckpointEndpoint(t *testing.T) {
 	}
 }
 
-// TestReleaseCheckpointAcceptsAnOperatorReason covers the optional reason,
-// which is what an operator leaves behind for whoever reads the agent logs.
-func TestReleaseCheckpointAcceptsAnOperatorReason(t *testing.T) {
+// TestReleaseCheckpointCarriesTheNoteBesideTheReason covers the optional note,
+// which is what an operator leaves behind for whoever reads the agent logs. It
+// never replaces the reason: agents switch on reason, so it stays the fixed
+// value however the note is worded.
+func TestReleaseCheckpointCarriesTheNoteBesideTheReason(t *testing.T) {
 	t.Parallel()
 
 	handler, application := newTestRouter(t)
@@ -156,22 +158,28 @@ func TestReleaseCheckpointAcceptsAnOperatorReason(t *testing.T) {
 	joinCheckpoint(t, run, "gate", 2, ids[0])
 
 	rec := do(t, handler, http.MethodPost, "/api/v1/runs/101/checkpoints/release",
-		`{"identifier":"gate","reason":"agent 2 lost its runner"}`,
+		`{"identifier":"gate","note":"  agent 2 lost its runner  "}`,
 	)
 
 	var body struct {
 		Reason string `json:"reason"`
+		Note   string `json:"note"`
 	}
 
 	decode(t, rec, &body)
 
-	if body.Reason != "agent 2 lost its runner" {
-		t.Fatalf("expected the operator's reason, got %q", body.Reason)
+	if body.Reason != runs.ReasonOperatorReleased {
+		t.Fatalf("the note displaced the reason: got reason %q", body.Reason)
+	}
+
+	if body.Note != "agent 2 lost its runner" {
+		t.Fatalf("expected the trimmed operator note, got %q", body.Note)
 	}
 }
 
 // TestReleaseCheckpointRejectsBadRequests covers the 400s: the identifier is
-// required, and a reason that would be echoed to every agent is bounded.
+// required, a note that would be echoed to every agent is bounded, and an
+// unknown field is refused rather than silently dropped.
 func TestReleaseCheckpointRejectsBadRequests(t *testing.T) {
 	t.Parallel()
 
@@ -180,15 +188,16 @@ func TestReleaseCheckpointRejectsBadRequests(t *testing.T) {
 	run, ids := newRun(t, application, 102, 2)
 	joinCheckpoint(t, run, "gate", 2, ids[0])
 
-	oversized := `{"identifier":"gate","reason":"` +
-		strings.Repeat("x", runs.MaxReleaseReasonBytes+1) + `"}`
+	oversized := `{"identifier":"gate","note":"` +
+		strings.Repeat("x", runs.MaxReleaseNoteBytes+1) + `"}`
 
 	bodies := map[string]string{
-		"no identifier":     `{"reason":"whatever"}`,
+		"no identifier":     `{"note":"whatever"}`,
+		"old reason field":  `{"identifier":"gate","reason":"whatever"}`,
 		"blank identifier":  `{"identifier":"   "}`,
 		"malformed json":    `{"identifier":`,
 		"empty body":        ``,
-		"oversized reason":  oversized,
+		"oversized note":    oversized,
 		"identifier is int": `{"identifier":7}`,
 	}
 

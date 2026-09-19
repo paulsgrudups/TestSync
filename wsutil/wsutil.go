@@ -4,14 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 
 	"github.com/gorilla/websocket"
 )
 
-// Message describes the body that WS should receive.
+// Message is the envelope of every WebSocket frame, in both directions. It is
+// protocol v1; see PROTOCOL.md.
 type Message struct {
-	Command string     `json:"command"`
+	Command string `json:"command"`
+
+	// ID is an optional correlation token chosen by the client: a JSON string
+	// or number. The server echoes it verbatim on the reply to that command
+	// and omits it when the command carried none.
+	ID json.RawMessage `json:"id,omitempty"`
+
 	Content RawMessage `json:"content"`
 }
 
@@ -28,15 +34,14 @@ func (rm *RawMessage) UnmarshalJSON(body []byte) error {
 	return nil
 }
 
-// MarshalJSON returns message bytes.
+// MarshalJSON returns message bytes. Empty content is written as null, which
+// is what a command without content decodes from.
 func (rm RawMessage) MarshalJSON() ([]byte, error) {
-	return rm.Bytes, nil
-}
+	if len(rm.Bytes) == 0 {
+		return []byte("null"), nil
+	}
 
-// Connect creates a new WebSocket connection to specified endpoint. Uses oAuth
-// client to authenticate connection.
-func Connect(url string) (*websocket.Conn, *http.Response, error) {
-	return websocket.DefaultDialer.Dial(url, http.Header{})
+	return rm.Bytes, nil
 }
 
 // SendMessage marshals and queues a message for the provided WebSocket
@@ -44,6 +49,14 @@ func Connect(url string) (*websocket.Conn, *http.Response, error) {
 // format. The message is written by the client's own writer, so this call
 // never blocks and never races another writer.
 func SendMessage(client *Client, cmd string, content any) error {
+	return SendReply(client, cmd, nil, content)
+}
+
+// SendReply is [SendMessage] for the reply to a particular command: id is the
+// correlation token that command carried, echoed back unchanged. A nil id is
+// omitted. Content that is already encoded, a [json.RawMessage], is sent as
+// is.
+func SendReply(client *Client, cmd string, id json.RawMessage, content any) error {
 	if client == nil {
 		return errors.New("no websocket connection provided")
 	}
@@ -55,6 +68,7 @@ func SendMessage(client *Client, cmd string, content any) error {
 
 	message, err := json.Marshal(Message{
 		Command: cmd,
+		ID:      id,
 		Content: RawMessage{Bytes: c},
 	})
 	if err != nil {

@@ -23,7 +23,9 @@ module.exports = {
 
     // Initialize the WebSocket
     const wsp = new WebSocketAsPromised("ws://localhost:9105/register/1", {
-      createWebSocket: (url) => new W3CWebSocket(url, null, null, headers),
+      // "testsync.v1" asks for protocol v1 by name (PROTOCOL.md).
+      createWebSocket: (url) =>
+        new W3CWebSocket(url, "testsync.v1", null, headers),
       packMessage: (data) => JSON.stringify(data),
       unpackMessage: (data) => JSON.parse(data),
     });
@@ -103,13 +105,15 @@ module.exports = {
     const message = await receiveMessage();
 
     console.log("[TestSync] Response data:", message);
+    // Wait start_in_ms from receipt. It is relative on purpose: start_at is
+    // an instant on the server's clock, and this machine's may disagree.
     console.log(
       "[TestSync] Should continue in:",
-      message.content.start_at - Date.now(),
-      "miliseconds"
+      message.content.start_in_ms,
+      "milliseconds"
     );
 
-    await sleep(message.content.start_at - Date.now())
+    await sleep(message.content.start_in_ms);
 
     // At this point the participants should be synchronized here.
 

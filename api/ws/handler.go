@@ -30,16 +30,29 @@ func NewCommandHandler(service *runs.Service, logger *slog.Logger) *CommandHandl
 	return &CommandHandler{service: service, log: logger}
 }
 
-// Handle processes a single WebSocket message. A command that is refused
-// because it would exceed a configured limit is answered with an "error"
-// message naming the limit, so that the agent is told rather than left to
-// guess why nothing happened (STAB-3, SEC-8).
+// Handle processes a single WebSocket message and answers it. Every command
+// gets exactly one reply: its result, or an "error" naming what went wrong
+// (API-2). The only exceptions are close, which is answered by the close
+// itself, and wait_checkpoint, whose result is the release that ends its
+// round. The returned error is for the caller's log.
 func (h *CommandHandler) Handle(
 	ctx context.Context, testID int, connID runs.ConnID, body []byte, t *runs.Test,
 ) error {
 	var m wsutil.Message
 	if err := json.Unmarshal(body, &m); err != nil {
-		return fmt.Errorf("could not unmarshal message: %w", err)
+		err = &commandError{
+			code: CodeInvalidMessage, message: "the message is not a JSON envelope", err: err,
+		}
+		h.reportFailure(ctx, t, connID, wsutil.Message{}, err)
+
+		return err
+	}
+
+	if err := validateRequestID(m.ID); err != nil {
+		// The id is not echoed: it is the thing that could not be trusted.
+		h.reportFailure(ctx, t, connID, wsutil.Message{Command: m.Command}, err)
+
+		return err
 	}
 
 	h.log.DebugContext(ctx, "websocket command received",
@@ -48,113 +61,170 @@ func (h *CommandHandler) Handle(
 
 	err := h.dispatch(ctx, testID, connID, m, t)
 	if err != nil {
-		h.reportRejection(ctx, t, connID, err)
+		h.reportFailure(ctx, t, connID, m, err)
 	}
 
 	return err
 }
 
-// dispatch runs one decoded command.
+// validateRequestID accepts an absent id, a JSON string or a JSON number, of
+// at most maxRequestIDBytes.
+func validateRequestID(id json.RawMessage) error {
+	if len(id) == 0 {
+		return nil
+	}
+
+	invalid := &commandError{
+		code: CodeInvalidMessage,
+		message: fmt.Sprintf(
+			"id must be a JSON string or number of at most %d bytes", maxRequestIDBytes,
+		),
+	}
+
+	if len(id) > maxRequestIDBytes {
+		return invalid
+	}
+
+	var v any
+	if err := json.Unmarshal(id, &v); err != nil {
+		return invalid
+	}
+
+	switch v.(type) {
+	case string, float64:
+		return nil
+	default:
+		return invalid
+	}
+}
+
+// dispatch runs one decoded command and sends its result.
 func (h *CommandHandler) dispatch(
 	ctx context.Context, testID int, connID runs.ConnID, m wsutil.Message, t *runs.Test,
 ) error {
+	client, err := getClient(t, connID)
+	if err != nil {
+		return err
+	}
+
 	switch m.Command {
 	case CommandReadData:
-		client, err := getClient(t, connID)
+		data, err := h.readData(ctx, testID)
 		if err != nil {
 			return err
 		}
 
-		// A test with no stored data is not an error here: the agent gets an
-		// empty message rather than a failure.
-		data, err := h.service.ReadTestData(ctx, testID)
-		if errors.Is(err, runs.ErrTestNotFound) {
-			data, err = nil, nil
-		}
-		if err != nil {
-			return fmt.Errorf("could not load data: %w", err)
+		return wsutil.SendReply(client, CommandReadData, m.ID, data)
+	case CommandUpdateData:
+		// Absent content decodes to nothing and "content": null to the four
+		// bytes null; neither is a payload anybody meant to store.
+		if len(m.Content.Bytes) == 0 || string(m.Content.Bytes) == "null" {
+			return invalidArgument("update_data needs content: the payload to store")
 		}
 
-		return client.Send(websocket.BinaryMessage, data)
-	case CommandUpdateData:
 		if err := h.service.UpdateTestData(ctx, testID, m.Content.Bytes); err != nil {
 			return fmt.Errorf("could not store data: %w", err)
 		}
 
-		return nil
+		return wsutil.SendReply(client, CommandUpdateData, m.ID, struct {
+			Bytes int `json:"bytes"`
+		}{Bytes: len(m.Content.Bytes)})
 	case CommandGetConnectionCount:
-		client, err := getClient(t, connID)
-		if err != nil {
-			return err
-		}
-
-		return wsutil.SendMessage(
-			client,
-			CommandGetConnectionCount,
-			struct {
-				Count int `json:"count"`
-			}{Count: t.ConnectionCount()},
-		)
+		return wsutil.SendReply(client, CommandGetConnectionCount, m.ID, struct {
+			Count int `json:"count"`
+		}{Count: t.ConnectionCount()})
 	case CommandWaitCheckpoint:
-		if _, err := getClient(t, connID); err != nil {
-			return err
-		}
-
-		return waitCheckPoint(m.Content.Bytes, connID, t)
+		return waitCheckPoint(m.Content.Bytes, connID, m.ID, t)
 	case CommandClose:
-		client, err := getClient(t, connID)
-		if err != nil {
-			return err
-		}
-
-		client.Close()
+		// A normal closure, after the replies to anything sent before it.
+		client.CloseWithReason(websocket.CloseNormalClosure, "")
 
 		return nil
 	default:
-		return fmt.Errorf("received non existing command: %s", m.Command)
+		return &commandError{
+			code:    CodeUnknownCommand,
+			message: fmt.Sprintf("unknown command %q", m.Command),
+		}
 	}
 }
 
-// reportRejection tells the client which limit it hit. Anything else is an
-// internal failure the client cannot act on, and is only logged.
-func (h *CommandHandler) reportRejection(
-	ctx context.Context, t *runs.Test, connID runs.ConnID, err error,
-) {
-	code, ok := rejectionCode(err)
-	if !ok {
-		return
+// readData loads the run's payload as the content of a read_data reply: the
+// stored JSON value itself, or null when nothing is stored. A payload that is
+// not JSON was written over HTTP and cannot be carried here.
+func (h *CommandHandler) readData(ctx context.Context, testID int) (json.RawMessage, error) {
+	data, err := h.service.ReadTestData(ctx, testID)
+	if errors.Is(err, runs.ErrTestNotFound) || (err == nil && len(data) == 0) {
+		return json.RawMessage("null"), nil
 	}
 
+	if err != nil {
+		return nil, fmt.Errorf("could not load data: %w", err)
+	}
+
+	if !json.Valid(data) {
+		return nil, &commandError{
+			code: CodeDataNotJSON,
+			message: "the stored payload is not JSON; " +
+				"read it with GET /tests/{testID} instead",
+		}
+	}
+
+	return data, nil
+}
+
+// reportFailure answers a failed command with an "error" reply.
+func (h *CommandHandler) reportFailure(
+	ctx context.Context, t *runs.Test, connID runs.ConnID, m wsutil.Message, err error,
+) {
 	client := t.GetConnection(connID)
 	if client == nil {
 		return
 	}
 
-	sendErr := wsutil.SendMessage(client, CommandError, ErrorContent{
-		Code:  code,
-		Error: err.Error(),
+	code, message := failureCode(err)
+
+	sendErr := wsutil.SendReply(client, CommandError, m.ID, ErrorContent{
+		Code:    code,
+		Command: m.Command,
+		Error:   message,
 	})
 	if sendErr != nil {
-		h.log.ErrorContext(ctx, "could not report a rejection to the client",
+		h.log.ErrorContext(ctx, "could not report a failure to the client",
 			"code", code, "error", sendErr, "conn_id", connID,
 		)
 	}
 }
 
-// rejectionCode maps a refusal to the stable code the client receives.
-func rejectionCode(err error) (string, bool) {
+// failureCode maps a failure to the code and message the client receives. An
+// unexpected failure is reported without its detail, which may describe the
+// server's storage rather than anything the client did.
+func failureCode(err error) (string, string) {
+	var cmdErr *commandError
+
 	switch {
+	case errors.As(err, &cmdErr):
+		return cmdErr.code, cmdErr.message
 	case errors.Is(err, runs.ErrDataTooLarge):
-		return CodePayloadTooLarge, true
+		return CodePayloadTooLarge, err.Error()
 	case errors.Is(err, runs.ErrCheckpointLimitReached):
-		return CodeCheckpointLimitReached, true
+		return CodeCheckpointLimitReached, err.Error()
 	case errors.Is(err, runs.ErrTestLimitReached):
-		return CodeTestLimitReached, true
+		return CodeTestLimitReached, err.Error()
 	case errors.Is(err, runs.ErrConnectionLimitReached):
-		return CodeConnectionLimitReached, true
+		return CodeConnectionLimitReached, err.Error()
 	default:
-		return "", false
+		return CodeInternalError, "the server could not complete the command"
 	}
+}
+
+// failureLogLevel is the level a failed command is logged at: error for a
+// failure of the server's own, info for anything the client caused.
+func failureLogLevel(err error) slog.Level {
+	if code, _ := failureCode(err); code == CodeInternalError {
+		return slog.LevelError
+	}
+
+	return slog.LevelInfo
 }
 
 func getClient(t *runs.Test, connID runs.ConnID) (*wsutil.Client, error) {

@@ -46,9 +46,13 @@ var (
 	// non-browser agents rely on today. Replacing it with a configured
 	// allow-list is tracked separately (SEC-4); doing it here would silently
 	// break them.
+	//
+	// Subprotocols lets a client that offers "testsync.v1" have it confirmed;
+	// one that offers nothing is still served v1 (see [Subprotocol]).
 	upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
+		Subprotocols:    []string{Subprotocol},
 		CheckOrigin:     func(_ *http.Request) bool { return true },
 	}
 )
@@ -219,8 +223,10 @@ func (s *Server) reader(parent context.Context, conn *websocket.Conn, testID int
 
 		logger.DebugContext(ctx, "received a message", "bytes", len(p))
 
+		// The client has already been told. Only a failure of the server's
+		// own is logged as an error; a client's mistake is routine.
 		if err = s.Handler.Handle(ctx, testID, connID, p, run); err != nil {
-			logger.ErrorContext(ctx, "failed to process a message", "error", err)
+			logger.Log(ctx, failureLogLevel(err), "failed to process a message", "error", err)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -22,8 +23,12 @@ import (
 // treated as [DefaultCheckpointTimeout]: an unbounded round is not on offer,
 // and a zero deadline would otherwise fire at once and time the round out
 // before the second agent could arrive.
+//
+// requestID is the correlation id of the join, echoed on the release this
+// connection receives; nil when the client sent none.
 func (t *Test) JoinCheckpoint(
 	identifier string, target int, timeout time.Duration, connID ConnID,
+	requestID json.RawMessage,
 ) error {
 	if timeout <= 0 {
 		timeout = DefaultCheckpointTimeout
@@ -37,7 +42,7 @@ func (t *Test) JoinCheckpoint(
 	// t.mu is released before cp.mu is taken, and cp.mu before the broadcast
 	// takes t.mu again to resolve the members: the two locks are never held at
 	// the same time.
-	if released := cp.join(connID, target, timeout); released != nil {
+	if released := cp.join(connID, requestID, target, timeout); released != nil {
 		cp.broadcastStatus(released)
 	}
 

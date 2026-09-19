@@ -15,7 +15,7 @@ import (
 )
 
 // maxReleaseBodyBytes bounds the release request body. It only ever carries a
-// checkpoint identifier and a short reason, so anything larger is a mistake
+// checkpoint identifier and a short note, so anything larger is a mistake
 // or an attempt to make the server read it.
 const maxReleaseBodyBytes = 8 << 10
 
@@ -23,15 +23,20 @@ const maxReleaseBodyBytes = 8 << 10
 // body rather than the path because it is arbitrary caller-supplied text: an
 // agent is free to name a barrier "checkout/step?2", which no path segment
 // survives intact.
+//
+// Note is optional free text for the people reading the agents' logs. It is
+// not the release's reason: every forced release reaches the agents with
+// reason "operator_released", a fixed value they can switch on.
 type releaseRequest struct {
 	Identifier string `json:"identifier"`
-	Reason     string `json:"reason"`
+	Note       string `json:"note"`
 }
 
 // releaseResponse reports the round that was ended.
 type releaseResponse struct {
 	Identifier string `json:"identifier"`
 	Reason     string `json:"reason"`
+	Note       string `json:"note"`
 	Generation int    `json:"generation"`
 	Released   int    `json:"released"`
 	Target     int    `json:"target"`
@@ -58,7 +63,7 @@ func (a *API) releaseCheckpointHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := a.service.ReleaseCheckpoint(testID, req.Identifier, req.Reason)
+	result, err := a.service.ReleaseCheckpoint(testID, req.Identifier, req.Note)
 	if err != nil {
 		a.writeReleaseError(ctx, w, testID, req.Identifier, err)
 		return
@@ -70,12 +75,13 @@ func (a *API) releaseCheckpointHandler(w http.ResponseWriter, r *http.Request) {
 		"generation", result.Generation,
 		"released", result.Released,
 		"target", result.Target,
-		"reason", result.Reason,
+		"note", result.Note,
 	)
 
 	a.writeJSON(ctx, w, http.StatusOK, releaseResponse{
 		Identifier: result.Identifier,
 		Reason:     result.Reason,
+		Note:       result.Note,
 		Generation: result.Generation,
 		Released:   result.Released,
 		Target:     result.Target,
@@ -187,7 +193,12 @@ func (a *API) decodeReleaseRequest(
 	body := http.MaxBytesReader(w, r.Body, maxReleaseBodyBytes)
 	defer body.Close()
 
-	if err := json.NewDecoder(body).Decode(&req); err != nil {
+	// Unknown fields are refused rather than ignored: a caller still sending
+	// the old "reason" field would otherwise have its text silently dropped.
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&req); err != nil {
 		a.log.DebugContext(ctx, "could not decode a release request", "error", err)
 		utils.HTTPErrorReason(
 			w, "Could not parse the request body", http.StatusBadRequest,
@@ -197,10 +208,11 @@ func (a *API) decodeReleaseRequest(
 		return releaseRequest{}, false
 	}
 
-	req.Identifier = strings.TrimSpace(req.Identifier)
-	req.Reason = strings.TrimSpace(req.Reason)
+	// The identifier is matched exactly as the agents spelled it, so it is
+	// only checked for blankness, never trimmed. The note is display text.
+	req.Note = strings.TrimSpace(req.Note)
 
-	if req.Identifier == "" {
+	if strings.TrimSpace(req.Identifier) == "" {
 		utils.HTTPErrorReason(
 			w, "A checkpoint identifier is required", http.StatusBadRequest,
 			runs.ErrorReasonInvalidRequest,
@@ -209,9 +221,9 @@ func (a *API) decodeReleaseRequest(
 		return releaseRequest{}, false
 	}
 
-	if len(req.Reason) > runs.MaxReleaseReasonBytes {
+	if len(req.Note) > runs.MaxReleaseNoteBytes {
 		utils.HTTPErrorReason(
-			w, "The release reason is too long", http.StatusBadRequest,
+			w, "The release note is too long", http.StatusBadRequest,
 			runs.ErrorReasonInvalidRequest,
 		)
 

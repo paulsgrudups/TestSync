@@ -76,10 +76,10 @@ const (
 	// given.
 	operatorDeleteReason = "run deleted by operator"
 
-	// MaxReleaseReasonBytes bounds a caller-supplied release reason. The
-	// reason is echoed to every agent of the round, so it is kept to something
-	// a log line can hold.
-	MaxReleaseReasonBytes = 128
+	// MaxReleaseNoteBytes bounds the note an operator attaches to a forced
+	// release. The note is echoed to every agent of the round, so it is kept
+	// to something a log line can hold.
+	MaxReleaseNoteBytes = 128
 
 	// ConnectionsDroppedHeader reports how many agents were attached to a run
 	// that has just been deleted, so an operator page can warn that a live
@@ -97,8 +97,11 @@ type ReleaseResult struct {
 	// Identifier is the barrier that was released.
 	Identifier string
 
-	// Reason is what the agents were told, after defaulting.
+	// Reason is what the agents were told: always [ReasonOperatorReleased].
 	Reason string
+
+	// Note is the operator's free text, trimmed, as the agents received it.
+	Note string
 
 	// Generation is the round that was ended, counted from one.
 	Generation int
@@ -114,23 +117,17 @@ type ReleaseResult struct {
 // ReleaseCheckpoint force-releases the round in progress on one run's
 // checkpoint, reporting [ErrRunNotFound] when the run is not registered.
 //
-// A blank reason becomes [ReasonOperatorReleased]. The reason reaches the
-// agents unchanged, so the caller is expected to have bounded its length
-// already; see [MaxReleaseReasonBytes].
+// The note reaches the agents trimmed but otherwise unchanged, so the caller is
+// expected to have bounded its length already; see [MaxReleaseNoteBytes].
 func (s *Service) ReleaseCheckpoint(
-	testID int, identifier, reason string,
+	testID int, identifier, note string,
 ) (ReleaseResult, error) {
 	run, ok := s.registry.Get(testID)
 	if !ok {
 		return ReleaseResult{}, fmt.Errorf("%w: %d", ErrRunNotFound, testID)
 	}
 
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		reason = ReasonOperatorReleased
-	}
-
-	return run.ReleaseCheckpoint(identifier, reason)
+	return run.ReleaseCheckpoint(identifier, strings.TrimSpace(note))
 }
 
 // DisconnectAgent closes one agent's connection to a run and removes it,
@@ -237,10 +234,10 @@ func (s *Service) DeleteRunHandler(w http.ResponseWriter, r *http.Request) {
 // and [ErrNoRoundInProgress] when the barrier is idle between rounds, which is
 // where a reusable checkpoint spends most of its time.
 //
-// The released agents are told finished: false unless the reason is
-// [ReasonComplete], which a forced release never is: they resume together, but
-// the barrier they were waiting for was not met.
-func (t *Test) ReleaseCheckpoint(identifier, reason string) (ReleaseResult, error) {
+// The released agents are told reason [ReasonOperatorReleased] and finished:
+// false: they resume together, but the barrier they were waiting for was not
+// met. The note travels beside the reason, never in place of it.
+func (t *Test) ReleaseCheckpoint(identifier, note string) (ReleaseResult, error) {
 	t.mu.RLock()
 	cp, ok := t.checkPoints[identifier]
 	t.mu.RUnlock()
@@ -249,7 +246,7 @@ func (t *Test) ReleaseCheckpoint(identifier, reason string) (ReleaseResult, erro
 		return ReleaseResult{}, fmt.Errorf("%w: %q", ErrCheckpointNotFound, identifier)
 	}
 
-	released := cp.forceRelease(reason)
+	released := cp.forceRelease(note)
 	if released == nil {
 		return ReleaseResult{}, fmt.Errorf("%w: %q", ErrNoRoundInProgress, identifier)
 	}
@@ -262,6 +259,7 @@ func (t *Test) ReleaseCheckpoint(identifier, reason string) (ReleaseResult, erro
 	return ReleaseResult{
 		Identifier: identifier,
 		Reason:     released.reason,
+		Note:       released.note,
 		Generation: released.generation,
 		Released:   released.joined,
 		Target:     released.target,

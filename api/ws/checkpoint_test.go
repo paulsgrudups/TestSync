@@ -373,6 +373,23 @@ func TestCheckpointRejectsInvalidRequests(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			a := newAgent(t, server, testID)
 			a.send(CommandWaitCheckpoint, content)
+
+			// The agent is told why, and is not released: a barrier that
+			// released on a bad request would leave it unsynchronized.
+			m, ok := a.expect(CommandError, 2*time.Second)
+			if !ok {
+				return
+			}
+
+			var body ErrorContent
+			if err := json.Unmarshal(m.Content.Bytes, &body); err != nil {
+				t.Fatalf("undecodable error reply: %v", err)
+			}
+
+			if body.Code != CodeInvalidArgument || body.Command != CommandWaitCheckpoint {
+				t.Fatalf("unexpected error reply: %+v", body)
+			}
+
 			a.expectSilence(500 * time.Millisecond)
 		})
 	}

@@ -26,7 +26,8 @@ func main() {
 	password := getEnv("TESTSYNC_PASS", "examplePassWord")
 
 	testID := 12345
-	payload := []byte("payload-e2e")
+	// JSON, so the WebSocket read_data can carry it back (protocol v1).
+	payload := []byte(`{"e2e":"payload"}`)
 
 	if err := httpCreate(httpURL, testID, payload, username, password); err != nil {
 		exitErr(err)
@@ -101,7 +102,9 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 		header.Set("Authorization", "Basic "+basicAuth(user, pass))
 	}
 
-	conn, resp, err := websocket.DefaultDialer.Dial(url, header)
+	dialer := websocket.Dialer{Subprotocols: []string{"testsync.v1"}}
+
+	conn, resp, err := dialer.Dial(url, header)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
@@ -121,8 +124,13 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(msg, payload) {
-		return fmt.Errorf("WS read_data returned unexpected payload: %q", string(msg))
+
+	var dataMsg Message
+	if err = json.Unmarshal(msg, &dataMsg); err != nil {
+		return fmt.Errorf("failed to unmarshal read_data reply: %w", err)
+	}
+	if dataMsg.Command != "read_data" || !bytes.Equal(dataMsg.Content, payload) {
+		return fmt.Errorf("WS read_data returned unexpected reply: %q", string(msg))
 	}
 
 	if err = writeWS(conn, "get_connection_count", map[string]string{}); err != nil {
@@ -170,12 +178,27 @@ func wsFlow(baseURL string, testID int, payload []byte, user, pass string) error
 	}
 
 	var checkpointMsg Message
-	if err := json.Unmarshal(msg, &checkpointMsg); err != nil {
+	if err = json.Unmarshal(msg, &checkpointMsg); err != nil {
 		return fmt.Errorf("failed to unmarshal checkpoint message: %w", err)
 	}
 	if checkpointMsg.Command != "wait_checkpoint" {
 		return fmt.Errorf("unexpected checkpoint command: %s", checkpointMsg.Command)
 	}
+
+	var release struct {
+		Finished  bool  `json:"finished"`
+		StartInMS int64 `json:"start_in_ms"`
+	}
+	if err = json.Unmarshal(checkpointMsg.Content, &release); err != nil {
+		return fmt.Errorf("failed to parse the release: %w", err)
+	}
+	if !release.Finished {
+		return fmt.Errorf("checkpoint released without finishing: %s", string(msg))
+	}
+
+	// Resume a fixed delay after receipt, never at an absolute time: the
+	// server's clock and this machine's need not agree.
+	time.Sleep(time.Duration(release.StartInMS) * time.Millisecond)
 
 	return nil
 }

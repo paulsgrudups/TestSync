@@ -17,6 +17,18 @@ import (
 func dialClient(t *testing.T) (*Client, *websocket.Conn) {
 	t.Helper()
 
+	client, peer, start := dialPausedClient(t)
+	start()
+
+	return client, peer
+}
+
+// dialPausedClient is dialClient with the writer not yet running: start runs
+// it. It lets a test put the client in a state before the writer sees any of
+// it.
+func dialPausedClient(t *testing.T) (*Client, *websocket.Conn, func()) {
+	t.Helper()
+
 	ready := make(chan *Client, 1)
 
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
@@ -28,10 +40,7 @@ func dialClient(t *testing.T) (*Client, *websocket.Conn) {
 				return
 			}
 
-			client := NewClient(conn, nil)
-			go client.WritePump()
-
-			ready <- client
+			ready <- NewClient(conn, nil)
 		},
 	))
 	t.Cleanup(server.Close)
@@ -51,10 +60,10 @@ func dialClient(t *testing.T) (*Client, *websocket.Conn) {
 
 	select {
 	case client := <-ready:
-		return client, peer
+		return client, peer, func() { go client.WritePump() }
 	case <-time.After(5 * time.Second):
 		t.Fatal("the server never wrapped the connection")
-		return nil, nil
+		return nil, nil, nil
 	}
 }
 
@@ -249,4 +258,49 @@ func TestNilClientIsClosed(t *testing.T) {
 
 	client.Close()
 	client.CloseWithReason(websocket.CloseNormalClosure, "")
+}
+
+// TestGracefulCloseFlushesQueuedMessages covers a client asking to close right
+// after other commands: the replies already queued for it are written before
+// the close frame. The writer used to pick at random between the queue and the
+// close signal, so a reply queued a moment before a close was lost about half
+// the time; the repetitions make that loss certain to show.
+func TestGracefulCloseFlushesQueuedMessages(t *testing.T) {
+	t.Parallel()
+
+	for range 20 {
+		client, peer, start := dialPausedClient(t)
+
+		for _, body := range []string{"first", "second"} {
+			if err := client.Send(websocket.TextMessage, []byte(body)); err != nil {
+				t.Fatalf("failed to queue %q: %v", body, err)
+			}
+		}
+
+		// Both the queue and the close are pending when the writer starts.
+		client.CloseWithReason(websocket.CloseNormalClosure, "")
+		start()
+
+		for _, want := range []string{"first", "second"} {
+			if err := peer.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatalf("failed to set deadline: %v", err)
+			}
+
+			_, got, err := peer.ReadMessage()
+			if err != nil {
+				t.Fatalf("lost %q to the close: %v", want, err)
+			}
+
+			if string(got) != want {
+				t.Fatalf("expected %q, got %q", want, got)
+			}
+		}
+
+		_, _, err := peer.ReadMessage()
+
+		var closeErr *websocket.CloseError
+		if !errors.As(err, &closeErr) || closeErr.Code != websocket.CloseNormalClosure {
+			t.Fatalf("expected a normal closure after the flush, got %v", err)
+		}
+	}
 }

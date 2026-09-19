@@ -31,7 +31,7 @@ store that state and a barrier to wait on.
 - [Authentication](#authentication)
 - [API](#api)
   - [HTTP](#http)
-  - [Monitoring](#monitoring)
+  - [Monitoring and management](#monitoring-and-management)
   - [WebSocket](#websocket)
   - [Checkpoints](#checkpoints)
 - [Operations](#operations)
@@ -96,6 +96,7 @@ Every key except `sync_client` may be omitted. Defaults are shown below.
 | `limits.max_connections_per_test` | `256` | Agents attached to one run |
 | `limits.max_checkpoints_per_test` | `256` | Checkpoint identifiers on one run |
 | `limits.max_data_bytes` | `10485760` | 10 MiB; payload, body and frame cap |
+| `checkpoint.release_lead_time` | `500ms` | How far ahead a release tells agents to resume; at most `10s` |
 
 <details>
 <summary><b>Full example configuration</b></summary>
@@ -127,6 +128,9 @@ Every key except `sync_client` may be omitted. Defaults are shown below.
     "max_connections_per_test": 256,
     "max_checkpoints_per_test": 256,
     "max_data_bytes": 10485760
+  },
+  "checkpoint": {
+    "release_lead_time": "500ms"
   }
 }
 ```
@@ -225,9 +229,12 @@ The UI is embedded in the binary and loads nothing from the network, so it works
 on an air-gapped CI box. It is served through the standard `401` challenge, so a
 browser will prompt for the same credentials.
 
-A forced release reaches the waiting agents in the usual checkpoint envelope,
-with `"reason": "operator_released"` and `"finished": false`: they resume
-together, but the barrier they were waiting for was not met.
+The release body is `{"identifier": "<checkpoint>", "note": "<optional>"}`. The
+waiting agents receive the usual checkpoint release, with
+`"reason": "operator_released"` and `"finished": false`: they resume together,
+but the barrier they were waiting for was not met. The optional `note` (at most
+128 bytes) reaches them in the release's `note` field, for whoever reads the
+logs; `reason` stays the fixed value so agents can branch on it.
 
 > [!NOTE]
 > `/api/v1/runs/{testID}/data` is the only route that returns stored contents.
@@ -249,130 +256,62 @@ Base: `ws://<host>:<ws_port>`
 > logs, so this path logs a deprecation warning on every use and will be
 > removed. Prefer the `Authorization` header.
 
-Every message uses the same envelope:
+The full specification — every message, error code and close code, with
+examples — is in **[PROTOCOL.md](PROTOCOL.md)**. This is protocol **v1**;
+clients should offer the `testsync.v1` subprotocol.
+
+Every frame is a JSON text frame in one envelope, and every command gets exactly
+one reply: its result, or an `error`. An optional `id` is echoed on the reply.
 
 ```json
-{
-  "command": "<string>",
-  "content": {}
-}
+{"command": "read_data", "id": 7}
+{"command": "read_data", "id": 7, "content": {"user": "alice"}}
 ```
 
-| Command | Behaviour |
+| Command | Reply |
 | --- | --- |
-| `read_data` | Replies with the raw stored data |
-| `update_data` | Replaces stored data. A payload over `limits.max_data_bytes` is refused |
-| `get_connection_count` | Replies with `{"count": <int>}`, counting only live connections. A disconnected agent stops being counted within one round-trip |
-| `wait_checkpoint` | Joins a checkpoint barrier — see below |
-| `close` | Closes the connection |
+| `update_data` | Stores `content` as the run's payload; replies `{"bytes": <int>}` |
+| `read_data` | The stored payload as `content`, or `null`. Only JSON payloads travel over WebSocket; read others over HTTP |
+| `get_connection_count` | `{"count": <int>}`, counting only live connections |
+| `wait_checkpoint` | Joins a checkpoint barrier; the reply is the release |
+| `close` | No reply; the server closes with `1000` after answering earlier commands |
 
 ### Checkpoints
 
 A checkpoint is a barrier: every agent that joins waits until the round it
 joined ends, and they are all told to resume at the same moment.
 
-**Request:**
-
 ```json
-{
-  "identifier": "login-complete",
-  "target_count": 4,
-  "timeout_ms": 60000
-}
+{"command": "wait_checkpoint", "id": "j1",
+ "content": {"identifier": "login-complete", "target_count": 4, "timeout_ms": 60000}}
 ```
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `identifier` | yes | Names the barrier. Must not be empty |
-| `target_count` | yes | How many distinct connections the round waits for. At least `1` |
-| `timeout_ms` | no | Bounds the wait. Omitted or `0` means 60s; above 30m is clamped; negative is rejected |
-
-The deadline is measured from the first agent's arrival, and the first agent of
-a round also fixes its `target_count` and `timeout_ms` for the other
-participants.
-
-**Reply**, sent to every participant when the round ends:
+`target_count` is how many distinct connections the round waits for;
+`timeout_ms` is optional (default 60s, clamped at 30m). The first agent of a
+round fixes both. When the round ends, every participant receives:
 
 ```json
-{
-  "identifier": "login-complete",
-  "finished": true,
-  "start_at": 1788209831733,
-  "reason": "complete",
-  "generation": 1,
-  "joined": 4,
-  "target": 4
-}
+{"command": "wait_checkpoint", "id": "j1", "content": {
+  "identifier": "login-complete", "finished": true, "reason": "complete",
+  "note": "", "generation": 1, "joined": 4, "target": 4,
+  "start_in_ms": 498, "server_time_ms": 1789037384226, "start_at": 1789037384726}}
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `identifier` | The barrier that ended |
-| `finished` | `true` only when every expected agent arrived |
-| `start_at` | Wall-clock milliseconds at which participants should resume |
-| `reason` | `complete`, `timeout`, or `participant_lost` |
-| `generation` | Round number, counting from `1` for each identifier |
-| `joined` / `target` | How many agents arrived, and how many were expected |
+**Sleep `start_in_ms` from receipt, then resume.** It is relative so that
+agents on machines whose clocks disagree still resume together; `start_at` is
+deprecated for exactly that reason.
+
+`reason` is one of `complete`, `timeout`, `participant_lost` or
+`operator_released`, and `finished` is `true` only for `complete`.
 
 > [!IMPORTANT]
-> Only `complete` reports `finished: true`. A `timeout` or `participant_lost`
-> round means the agents were **not** synchronized, and the suite should fail
-> loudly rather than carry on.
-
-`identifier`, `finished` and `start_at` are sent for every outcome, so a client
-that ignores the other fields keeps working.
+> A release with `finished: false` means the agents were **not** synchronized,
+> and the suite should fail loudly rather than carry on.
 
 **Barriers are reusable.** Once a round ends, the identifier immediately starts
-a fresh, empty round, so a looping suite calls `wait_checkpoint` with the same
-identifier every iteration and each round blocks on its own. Unique
-per-iteration identifiers are not needed.
-
-A round also ends when it can no longer succeed: if a connection disconnects and
-fewer connections remain than the round's `target_count`, everyone still waiting
-is released with `participant_lost` rather than waiting for an agent that is
-never coming back. An agent that disconnects *before* the others join is not
-detectable that way, so the round's timeout is the backstop.
-
-## Operations
-
-### Startup failures
-
-A configuration the server cannot run with is reported as one line on stderr,
-and the process exits with status `1`:
-
-```text
-testsync: no configuration file at ./config/configuration.json: create it, or point -c at the directory holding it
-testsync: could not read ./config/configuration.json: unexpected end of JSON input
-testsync: invalid logging.level "VERBOSE": use DEBUG, INFO, WARN or ERROR
-testsync: invalid configuration in ./config/configuration.json: http_port is 70000; it must be between 1 and 65535
-testsync: http server on port 9104: listen tcp :9104: bind: address already in use
-testsync: websocket server on port 9105: listen tcp :9105: bind: address already in use
-```
-
-### Shutdown
-
-On `SIGINT`/`SIGTERM` the server stops accepting, lets in-flight requests
-finish, tells every connected agent it is going away with WebSocket close code
-**1012 (Service Restart)**, stops the janitor, and closes the database last. The
-whole sequence is bounded at 15 seconds.
-
-An agent can therefore tell a deploy from a crash: `1012` means "reconnect",
-while a dropped socket (`1006`) does not.
-
-### Retention
-
-Test runs are held in memory for as long as they are useful, then reclaimed —
-together with their stored data — by a background janitor.
-
-- `cleanup.retention` is how long a run with **no connected agents** is kept.
-- `cleanup.interval` is how often the janitor sweeps. It also sweeps once at
-  startup, so data left by a previous process is reclaimed immediately.
-- Both are duration strings: `"90s"`, `"30m"`, `"12h"`. An unparseable value is
-  a startup error.
-
-> [!NOTE]
-> A run whose agents are still connected is **never** swept, however old it is,
-> and neither is its stored data.
+a fresh round, so a looping suite uses the same identifier every iteration. A
+round also ends early with `participant_lost` when a disconnect leaves too few
+agents to reach its target.
 
 ### Limits
 
@@ -393,26 +332,9 @@ A limit that is omitted or set to `0` uses the default. A negative value is a
 startup error. There is no "unlimited" setting — an unbounded server is what
 these exist to prevent.
 
-#### The `error` reply
-
-A refused command is answered on the same connection, in the standard envelope:
-
-```json
-{
-  "command": "error",
-  "content": {
-    "code": "payload_too_large",
-    "error": "<human-readable reason>"
-  }
-}
-```
-
-`code` is one of `payload_too_large`, `checkpoint_limit_reached`,
-`test_limit_reached` or `connection_limit_reached`. It is stable and safe to
-branch on; `error` is for logs and for whoever reads the failed run.
-
-`error` is a reply, never a request: a client that ignores unknown commands
-keeps working exactly as before.
+A refused WebSocket command is answered with an `error` reply carrying a stable
+`code`, such as `payload_too_large`; the connection stays usable. See
+[PROTOCOL.md](PROTOCOL.md#errors) for every code.
 
 ### Storage
 

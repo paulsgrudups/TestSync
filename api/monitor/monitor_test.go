@@ -394,7 +394,7 @@ func joinCheckpoint(
 	t.Helper()
 
 	if err := run.JoinCheckpoint(
-		identifier, target, runs.DefaultCheckpointTimeout, connID,
+		identifier, target, runs.DefaultCheckpointTimeout, connID, nil,
 	); err != nil {
 		t.Fatalf("failed to join checkpoint %q: %v", identifier, err)
 	}

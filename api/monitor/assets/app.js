@@ -24,10 +24,10 @@
   // megabytes; the viewer is for recognising one, not for reading it whole.
   var PREVIEW_BYTES = 8192;
 
-  // The server trims a release reason and rejects anything longer (contract
-  // section 1). The same bound is applied here so the operator learns about it
-  // while typing rather than from a 400.
-  var MAX_REASON_BYTES = 128;
+  // The server trims a release note and rejects anything longer. The same
+  // bound is applied here so the operator learns about it while typing rather
+  // than from a 400.
+  var MAX_NOTE_BYTES = 128;
 
   // Features that only newer servers have. A value of false means the endpoint
   // answered 404/405 and the matching affordance is disabled.
@@ -69,7 +69,7 @@
       confirmDelete: false,
       deleted: false,
       deletedNote: '',
-      released: {}         // identifier -> { generation, reason, released }
+      released: {}         // identifier -> { generation, note, released }
     };
   }
 
@@ -788,7 +788,7 @@
       : null;
 
     // A rebuilt text box would otherwise drop the caret at the end of the
-    // value, which is unusable for anyone editing in the middle of a reason.
+    // value, which is unusable for anyone editing in the middle of a note.
     var start = null;
     var end = null;
 
@@ -1420,8 +1420,9 @@
         note.textContent = lead + '.';
       }
     } else if (released) {
-      note.textContent = 'Released manually. Reason "' + released.reason +
-        '" and a shared start_at were queued to the ' + released.released + ' ' +
+      note.textContent = 'Released manually' +
+        (released.note ? ' with the note "' + released.note + '"' : '') +
+        '. The release was queued to the ' + released.released + ' ' +
         plural(released.released, 'agent', 'agents') + ' that ' +
         plural(released.released, 'was', 'were') + ' waiting.';
     } else if (cp.rounds_completed > 0) {
@@ -1930,7 +1931,7 @@
   // wire, and only then the button.
   function confirmRelease(targets, loadFailures) {
     var local = {
-      reason: 'operator_released',
+      note: '',
       stage: 'ask',
       busy: false,
       results: [],
@@ -1941,12 +1942,12 @@
 
     var single = targets.length === 1 ? targets[0] : null;
 
-    function effectiveReason() {
-      return local.reason.trim() || 'operator_released';
+    function trimmedNote() {
+      return local.note.trim();
     }
 
-    function reasonTooLong() {
-      return byteLength(local.reason.trim()) > MAX_REASON_BYTES;
+    function noteTooLong() {
+      return byteLength(trimmedNote()) > MAX_NOTE_BYTES;
     }
 
     function askBody() {
@@ -1987,18 +1988,18 @@
       }
 
       var field = el('label', { class: 'field' }, [
-        el('span', { class: 'lbl', text: 'Reason sent to the agents' })
+        el('span', { class: 'lbl', text: 'Note for the agents\u2019 logs (optional)' })
       ]);
 
       var input = el('input', {
         type: 'text',
-        value: local.reason,
-        placeholder: 'operator_released',
-        'data-focus-key': 'release:reason'
+        value: local.note,
+        placeholder: 'e.g. build box 3 lost its runner',
+        'data-focus-key': 'release:note'
       });
 
       input.addEventListener('input', function () {
-        local.reason = input.value;
+        local.note = input.value;
         refreshDialog();
       });
 
@@ -2006,19 +2007,19 @@
 
       var body = [impact(rows), field];
 
-      if (reasonTooLong()) {
-        body.push(noteStrip('bad', 'A reason may be at most ' +
-          MAX_REASON_BYTES + ' bytes; this one is ' +
-          byteLength(local.reason.trim()) + '. The server would answer 400.'));
+      if (noteTooLong()) {
+        body.push(noteStrip('bad', 'A note may be at most ' +
+          MAX_NOTE_BYTES + ' bytes; this one is ' +
+          byteLength(trimmedNote()) + '. The server would answer 400.'));
       }
 
       if (single) {
         body.push(el('p', { class: 'wire', text: wirePreview(single) }));
         body.push(el('p', {
           class: 'wire-note',
-          text: 'finished stays false — the server sets it only for reason ' +
-            '"complete". start_at is the shared moment every released agent ' +
-            'resumes at.'
+          text: 'reason is always "operator_released", so agents can tell a ' +
+            'forced release from a met barrier, and finished stays false. ' +
+            'Each agent resumes start_in_ms after receiving it.'
         }));
       }
 
@@ -2032,11 +2033,12 @@
         '{"command":"wait_checkpoint","content":{\n' +
         '  "identifier":' + JSON.stringify(cp.identifier) + ',\n' +
         '  "finished":false,\n' +
-        '  "start_at":<the shared resume moment>,\n' +
-        '  "reason":' + JSON.stringify(effectiveReason()) + ',\n' +
+        '  "reason":"operator_released",\n' +
+        '  "note":' + JSON.stringify(trimmedNote()) + ',\n' +
         '  "generation":' + cp.generation + ',' +
         '"joined":' + cp.joined_count + ',' +
-        '"target":' + cp.target_count + '}}';
+        '"target":' + cp.target_count + ',\n' +
+        '  "start_in_ms":<the shared lead time>, ...}}';
     }
 
     function askDialog() {
@@ -2080,7 +2082,7 @@
           : (single ? 'Release round ' + single.checkpoint.generation
             : 'Release ' + targets.length + ' barriers'),
         key: 'release:go',
-        disabled: local.busy || reasonTooLong(),
+        disabled: local.busy || noteTooLong(),
         onClick: send
       }));
 
@@ -2099,7 +2101,7 @@
         return sum + item.released;
       }, 0);
 
-      var rows = [['Reason sent', effectiveReason()]];
+      var rows = [['Note sent', trimmedNote() || 'none']];
 
       if (local.results.length === 1) {
         rows.push(['Released', local.results[0].released + ' ' +
@@ -2148,7 +2150,7 @@
       local.busy = true;
       refreshDialog();
 
-      var reason = effectiveReason();
+      var note = trimmedNote();
 
       var chain = targets.reduce(function (previous, target) {
         return previous.then(function () {
@@ -2160,7 +2162,7 @@
               contentType: 'application/json',
               body: JSON.stringify({
                 identifier: target.checkpoint.identifier,
-                reason: reason
+                note: note
               })
             }
           ).then(function (result) {
@@ -2183,7 +2185,7 @@
                 generation: typeof body.generation === 'number'
                   ? body.generation
                   : target.checkpoint.generation,
-                reason: typeof body.reason === 'string' ? body.reason : reason
+                note: typeof body.note === 'string' ? body.note : note
               });
 
               if (String(target.run.test_id) === String(state.route.id)) {
@@ -2197,7 +2199,7 @@
                 identifier: target.checkpoint.identifier,
                 released: target.checkpoint.joined_count,
                 generation: target.checkpoint.generation,
-                reason: reason
+                note: note
               });
             });
           });

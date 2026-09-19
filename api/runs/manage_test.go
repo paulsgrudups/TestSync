@@ -74,7 +74,7 @@ func TestReleaseCheckpointEndsTheRound(t *testing.T) {
 	ids := attach(t, run, 3)
 
 	for _, id := range ids[:2] {
-		if err := run.JoinCheckpoint("stage-1", 3, DefaultCheckpointTimeout, id); err != nil {
+		if err := run.JoinCheckpoint("stage-1", 3, DefaultCheckpointTimeout, id, nil); err != nil {
 			t.Fatalf("failed to join: %v", err)
 		}
 	}
@@ -99,7 +99,7 @@ func TestReleaseCheckpointEndsTheRound(t *testing.T) {
 
 	// The barrier is reusable, so the next round must work as if the forced
 	// one had ended by itself.
-	if err := run.JoinCheckpoint("stage-1", 3, DefaultCheckpointTimeout, ids[0]); err != nil {
+	if err := run.JoinCheckpoint("stage-1", 3, DefaultCheckpointTimeout, ids[0], nil); err != nil {
 		t.Fatalf("failed to join the next round: %v", err)
 	}
 
@@ -108,9 +108,9 @@ func TestReleaseCheckpointEndsTheRound(t *testing.T) {
 	}
 }
 
-// TestReleaseCheckpointKeepsTheReason covers an operator-supplied reason
-// reaching the release unchanged.
-func TestReleaseCheckpointKeepsTheReason(t *testing.T) {
+// TestReleaseCheckpointKeepsTheNote covers an operator-supplied note reaching
+// the release trimmed, beside a reason that stays fixed.
+func TestReleaseCheckpointKeepsTheNote(t *testing.T) {
 	t.Parallel()
 
 	registry, svc := newTestSetup(t, DefaultLimits())
@@ -119,7 +119,7 @@ func TestReleaseCheckpointKeepsTheReason(t *testing.T) {
 
 	id := attach(t, run, 1)[0]
 
-	if err := run.JoinCheckpoint("stage-1", 2, DefaultCheckpointTimeout, id); err != nil {
+	if err := run.JoinCheckpoint("stage-1", 2, DefaultCheckpointTimeout, id, nil); err != nil {
 		t.Fatalf("failed to join: %v", err)
 	}
 
@@ -128,8 +128,12 @@ func TestReleaseCheckpointKeepsTheReason(t *testing.T) {
 		t.Fatalf("failed to release: %v", err)
 	}
 
-	if result.Reason != "build box died" {
-		t.Fatalf("expected the trimmed operator reason, got %q", result.Reason)
+	if result.Note != "build box died" {
+		t.Fatalf("expected the trimmed operator note, got %q", result.Note)
+	}
+
+	if result.Reason != ReasonOperatorReleased {
+		t.Fatalf("the note displaced the reason: got %q", result.Reason)
 	}
 }
 
@@ -146,7 +150,7 @@ func TestReleaseCheckpointFailures(t *testing.T) {
 
 	// A barrier that exists but is idle: joining a round of one releases it
 	// immediately, so the checkpoint is left between rounds.
-	if err := run.JoinCheckpoint("done", 1, DefaultCheckpointTimeout, id); err != nil {
+	if err := run.JoinCheckpoint("done", 1, DefaultCheckpointTimeout, id, nil); err != nil {
 		t.Fatalf("failed to join: %v", err)
 	}
 
@@ -194,7 +198,7 @@ func TestDisconnectFreesTheBarrierSlot(t *testing.T) {
 
 	// The agent that will be disconnected joins first, and so fixes the round
 	// at three participants.
-	if err := run.JoinCheckpoint("gate", 3, DefaultCheckpointTimeout, ids[0]); err != nil {
+	if err := run.JoinCheckpoint("gate", 3, DefaultCheckpointTimeout, ids[0], nil); err != nil {
 		t.Fatalf("failed to join: %v", err)
 	}
 
@@ -213,7 +217,7 @@ func TestDisconnectFreesTheBarrierSlot(t *testing.T) {
 	// Two of the three survivors join. That is two members, not three: the
 	// disconnected agent must no longer be one of them.
 	for _, id := range ids[1:3] {
-		if err := run.JoinCheckpoint("gate", 3, DefaultCheckpointTimeout, id); err != nil {
+		if err := run.JoinCheckpoint("gate", 3, DefaultCheckpointTimeout, id, nil); err != nil {
 			t.Fatalf("failed to join: %v", err)
 		}
 	}
@@ -226,7 +230,7 @@ func TestDisconnectFreesTheBarrierSlot(t *testing.T) {
 	}
 
 	// The third survivor completes the round the disconnected agent started.
-	if err := run.JoinCheckpoint("gate", 3, DefaultCheckpointTimeout, ids[3]); err != nil {
+	if err := run.JoinCheckpoint("gate", 3, DefaultCheckpointTimeout, ids[3], nil); err != nil {
 		t.Fatalf("failed to join: %v", err)
 	}
 

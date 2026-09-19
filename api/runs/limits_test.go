@@ -110,19 +110,19 @@ func TestMaxCheckpointsPerTestRejectsNewIdentifiers(t *testing.T) {
 	}
 
 	for _, identifier := range []string{"round-1", "round-2"} {
-		if err = run.JoinCheckpoint(identifier, 5, time.Minute, connID); err != nil {
+		if err = run.JoinCheckpoint(identifier, 5, time.Minute, connID, nil); err != nil {
 			t.Fatalf("checkpoint %q was refused below the limit: %v", identifier, err)
 		}
 	}
 
-	err = run.JoinCheckpoint("round-3", 5, time.Minute, connID)
+	err = run.JoinCheckpoint("round-3", 5, time.Minute, connID, nil)
 	if !errors.Is(err, ErrCheckpointLimitReached) {
 		t.Fatalf("expected ErrCheckpointLimitReached, got %v", err)
 	}
 
 	// An identifier that already exists still works: the limit bounds how many
 	// barriers a run may have, not how often they may be used.
-	if err := run.JoinCheckpoint("round-1", 5, time.Minute, connID); err != nil {
+	if err := run.JoinCheckpoint("round-1", 5, time.Minute, connID, nil); err != nil {
 		t.Fatalf("an existing checkpoint was refused: %v", err)
 	}
 

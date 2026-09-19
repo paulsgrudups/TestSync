@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -161,9 +162,10 @@ func TestFrozenPeerDoesNotStallTheRun(t *testing.T) {
 
 	// Seed a large payload for the frozen peer to keep asking for. Small
 	// replies vanish into the kernel's socket buffer and never wedge anything.
-	if err := application.Service.UpdateTestData(
-		t.Context(), testID, make([]byte, payload),
-	); err != nil {
+	// It is a JSON string, since read_data only carries JSON.
+	seed := []byte(`"` + strings.Repeat("x", payload) + `"`)
+
+	if err := application.Service.UpdateTestData(t.Context(), testID, seed); err != nil {
 		t.Fatalf("failed to seed the payload: %v", err)
 	}
 
