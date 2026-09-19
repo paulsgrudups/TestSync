@@ -17,7 +17,7 @@
     <div class="brand">
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-name">TestSync</span>
-      <span class="brand-sub">run monitor</span>
+      <span class="brand-sub">run console</span>
     </div>
 
     <div class="controls">
@@ -45,12 +45,38 @@
 
 <p class="banner" id="banner" role="alert" hidden></p>
 
+<!-- Filled in when a management endpoint answers 404/405, i.e. when the page
+     is talking to a server built before run management existed. -->
+<p class="banner note" id="capability-note" role="status" hidden></p>
+
 <main id="main">
   <section id="list-view" aria-labelledby="list-heading">
     <div class="section-head">
       <h1 id="list-heading">Test runs</h1>
       <p class="section-note" id="list-summary"></p>
     </div>
+
+    <!-- The toolbar is static markup rather than a re-rendered node: the poll
+         loop repaints the table, and a rebuilt input would steal the caret. -->
+    <div class="toolbar" id="list-toolbar">
+      <div class="search">
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true" focusable="false">
+          <circle cx="9" cy="9" r="5.5"></circle><path d="M13.2 13.2 17 17"></path>
+        </svg>
+        <label class="sr-only" for="query">Filter by run ID</label>
+        <input type="text" id="query" placeholder="Filter by run ID" autocomplete="off" inputmode="numeric">
+      </div>
+
+      <div class="chips" role="group" aria-label="Filter runs">
+        <button type="button" class="chip" id="chip-all" aria-pressed="true">All <span class="n"></span></button>
+        <button type="button" class="chip" id="chip-waiting" aria-pressed="false">Waiting <span class="n"></span></button>
+        <button type="button" class="chip" id="chip-idle" aria-pressed="false">Idle <span class="n"></span></button>
+        <button type="button" class="chip" id="chip-data" aria-pressed="false">Has data <span class="n"></span></button>
+      </div>
+
+      <span class="spacer"></span>
+    </div>
+
     <div id="list-body"></div>
   </section>
 
@@ -64,11 +90,19 @@
 
     <div id="detail-body"></div>
   </section>
+
+  <p class="footnote">Force-release ends the current round for every agent waiting on it. Deleting a run removes its stored payload as well. The payload drawer is the only place in this console where payload contents appear.</p>
 </main>
 
 <footer class="footer">
-  <p>Read-only view. Stored test payloads are never shown here &mdash; sizes and counts only.</p>
+  <p>Destructive actions ask first and say what they cost. Nothing here is undone by the server: a deleted run and its payload are gone.</p>
 </footer>
+
+<!-- Dialogs mount here, outside <main>, so that the poll loop repainting the
+     table cannot tear an open dialog out from under the keyboard. -->
+<div id="dialog-root"></div>
+
+<p class="sr-only" id="action-status" role="status" aria-live="polite"></p>
 
 <script src="/ui/app.js" defer></script>
 </body>

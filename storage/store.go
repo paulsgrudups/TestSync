@@ -19,7 +19,7 @@ type DataStore interface {
 	DeleteOlderThanExcept(ctx context.Context, limit time.Time, keepIDs []int) error
 
 	// DataSize reports the size in bytes of one stored payload, without
-	// reading it. The monitoring API reports sizes and never contents, so it
+	// reading it. The run views report sizes rather than contents, so they
 	// must be able to ask for one without pulling an arbitrary blob into
 	// memory.
 	DataSize(ctx context.Context, testID int) (int, bool, error)

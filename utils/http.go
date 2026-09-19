@@ -17,6 +17,13 @@ type ErrorResponse struct {
 	Code int `json:"code"`
 	// Error description
 	Error string `json:"error"`
+	// Reason is a stable, machine-readable name for the failure, such as
+	// "run_not_found". It lets a client branch on the cause without matching
+	// on the prose in Error, which is free to change.
+	//
+	// It is omitted when empty, so a response written by [HTTPError] is
+	// byte-identical to what it has always been.
+	Reason string `json:"reason,omitempty"`
 }
 
 type responseWriter struct {
@@ -118,11 +125,22 @@ func RecoverGoroutine(logger *slog.Logger, name string) {
 // logging middleware has already recorded the status. Logging it would need a
 // logger at every one of this function's call sites to say nothing useful.
 func HTTPError(w http.ResponseWriter, message string, code int) {
+	HTTPErrorReason(w, message, code, "")
+}
+
+// HTTPErrorReason writes the standard JSON error response with a stable
+// machine-readable reason alongside the human-readable message, so a client
+// can branch on the cause rather than on the prose. An empty reason is
+// omitted, which is what makes [HTTPError] a special case of this.
+//
+// A failed write is ignored for the same reason it is in [HTTPError].
+func HTTPErrorReason(w http.ResponseWriter, message string, code int, reason string) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(code)
 
 	_ = json.NewEncoder(w).Encode(ErrorResponse{
-		Code:  code,
-		Error: message,
+		Code:   code,
+		Error:  message,
+		Reason: reason,
 	})
 }

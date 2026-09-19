@@ -1,9 +1,18 @@
-// Package monitor serves the read-only monitoring API and the operator UI.
+// Package monitor serves the run management API and the operator UI.
 //
-// Everything in here observes: no route mutates a run, releases a barrier or
-// touches stored test data, and no response ever contains a stored payload.
-// Runs can hold anything an agent put in them, so the monitor reports sizes
-// and counts instead.
+// Most of it observes: the run list and the run detail view report the
+// coordination state of every run and never change it. The rest of it does
+// not. An operator can force a checkpoint round to release, disconnect one
+// agent, and delete a run together with its stored payload, because a suite
+// that has wedged itself on a barrier needs someone with a way to unstick it.
+// Those routes mutate a run, and they sit behind the same credentials as
+// everything else here.
+//
+// The guarantee that does still hold is about the payloads. Exactly one route,
+// GET /api/v1/runs/{testID}/data, returns stored contents, and it says so
+// where it is implemented. Every other response in this package reports sizes
+// and counts: a run can hold whatever an agent put in it, and a page that
+// polls every second is no place for it to surface.
 package monitor
 
 import (
@@ -88,7 +97,7 @@ type API struct {
 	log      *slog.Logger
 }
 
-// RegisterRoutes registers the monitoring API and the UI page for the given
+// RegisterRoutes registers the management API and the UI page for the given
 // application.
 //
 // Both sit behind the same validator as every other route, carried on the App
@@ -104,6 +113,18 @@ func RegisterRoutes(r *mux.Router, a *app.App) {
 	apiRouter.HandleFunc("/runs", api.listRunsHandler).Methods(http.MethodGet)
 	apiRouter.HandleFunc(`/runs/{testID:\d+}`, api.runDetailHandler).
 		Methods(http.MethodGet)
+
+	// The operator overrides. Deleting a run is the same operation as the
+	// agent-facing DELETE /tests/{testID}, so it is literally the same
+	// handler rather than a second implementation of it.
+	apiRouter.HandleFunc(`/runs/{testID:\d+}/data`, api.runDataHandler).
+		Methods(http.MethodGet)
+	apiRouter.HandleFunc(`/runs/{testID:\d+}/checkpoints/release`, api.releaseCheckpointHandler).
+		Methods(http.MethodPost)
+	apiRouter.HandleFunc(`/runs/{testID:\d+}/connections/{connID:\d+}`, api.disconnectHandler).
+		Methods(http.MethodDelete)
+	apiRouter.HandleFunc(`/runs/{testID:\d+}`, a.Service.DeleteRunHandler).
+		Methods(http.MethodDelete)
 
 	registerUIRoutes(r, validator, a.Log)
 }

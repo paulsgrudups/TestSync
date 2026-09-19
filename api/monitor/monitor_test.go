@@ -296,27 +296,43 @@ func TestRunDetailNotFound(t *testing.T) {
 	}
 }
 
-// TestMonitorRoutesAreReadOnly makes sure no write verb was registered by
-// accident: the monitor may never mutate a run.
-func TestMonitorRoutesAreReadOnly(t *testing.T) {
+// TestMonitorRejectsUnregisteredVerbs makes sure no write verb was registered
+// by accident. The package mutates a run on exactly three routes now, and
+// every other verb on the same paths must still be refused: a run detail view
+// answering a PUT would mean a route was registered without anyone deciding
+// what it does.
+func TestMonitorRejectsUnregisteredVerbs(t *testing.T) {
 	t.Parallel()
 
 	handler, application := newTestRouter(t)
 
 	newRun(t, application, 55, 1)
 
-	methods := []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+	requests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/runs/55"},
+		{http.MethodPut, "/api/v1/runs/55"},
+		{http.MethodPatch, "/api/v1/runs/55"},
+		{http.MethodPost, "/api/v1/runs"},
+		{http.MethodDelete, "/api/v1/runs"},
+		{http.MethodPut, "/api/v1/runs/55/data"},
+		{http.MethodDelete, "/api/v1/runs/55/data"},
+		{http.MethodGet, "/api/v1/runs/55/checkpoints/release"},
+		{http.MethodPost, "/api/v1/runs/55/connections/1"},
+	}
 
-	for _, method := range methods {
-		t.Run(method, func(t *testing.T) {
-			req := httptest.NewRequest(method, "/api/v1/runs/55", strings.NewReader("{}"))
+	for _, tc := range requests {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}"))
 			req.SetBasicAuth("user", "pass")
 
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
-				t.Fatalf("expected %s to be rejected, got %d", method, rec.Code)
+				t.Fatalf("expected %s %s to be rejected, got %d", tc.method, tc.path, rec.Code)
 			}
 		})
 	}

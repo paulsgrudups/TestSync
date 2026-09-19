@@ -44,6 +44,12 @@ const (
 	// ReasonParticipantLost means a connection went away and left the round
 	// with fewer agents than it needs.
 	ReasonParticipantLost = "participant_lost"
+
+	// ReasonOperatorReleased means an operator ended the round from the
+	// management API while it was still short of its target. It reports
+	// finished: false like every reason but [ReasonComplete]: the agents
+	// resume together, but the barrier was not met.
+	ReasonOperatorReleased = "operator_released"
 )
 
 // checkpointStatus is the payload every participant of a round receives when
@@ -222,6 +228,32 @@ func (cp *checkpoint) expire(generation int) {
 	)
 
 	cp.broadcastStatus(released)
+}
+
+// forceRelease ends the round that is in progress with the given reason, and
+// returns the members to notify. It returns nil when no round is in progress,
+// which is the caller's cue that there was nobody to release.
+//
+// It is the operator override behind the management API. The round is ended
+// through endRoundLocked like every other ending, so a forced release
+// snapshots its members, disarms the deadline and opens the next round by
+// exactly the same code path as a completed or expired one.
+//
+// The caller broadcasts, outside the lock this takes.
+func (cp *checkpoint) forceRelease(reason string) *release {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+
+	if len(cp.members) == 0 {
+		return nil
+	}
+
+	cp.log.Info("checkpoint round released by an operator",
+		"generation", cp.generation, "joined", len(cp.members),
+		"target", cp.targetCount, "reason", reason,
+	)
+
+	return cp.endRoundLocked(reason)
 }
 
 // endRoundLocked closes the current round, snapshots what the participants

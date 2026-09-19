@@ -197,32 +197,43 @@ Base: `http://<host>:<http_port>`
 
 | Method | Route | Description | Auth |
 | --- | --- | --- | --- |
-| `POST` | `/tests/{testID}` | Stores the raw request body as test data | Basic |
+| `POST` | `/tests/{testID}` | Stores the raw request body as test data, refusing a run that already has some | Basic |
 | `GET` | `/tests/{testID}` | Returns the stored raw test data | Basic |
+| `PUT` | `/tests/{testID}` | Replaces the stored test data, whether or not there was any | Basic |
+| `DELETE` | `/tests/{testID}` | Deletes the run and its stored data — `204`, with `X-TestSync-Connections-Dropped` | Basic |
 | `GET` | `/health` | Returns `{"status":"ok"}` | None |
 
 Errors are JSON — `{"code": <int>, "error": "<message>"}` — while successful
-reads return raw bytes.
+reads return raw bytes. Failures that a client may want to branch on carry a
+stable `"reason"` as well, such as `run_not_found` or `no_round_in_progress`.
 
-### Monitoring
+### Monitoring and management
 
-Read-only views of live state, behind the same credentials.
+Live state and the operator overrides for it, behind the same credentials.
 
 | Method | Route | Description |
 | --- | --- | --- |
 | `GET` | `/api/v1/runs` | Every known run with its agent, checkpoint and data counters |
 | `GET` | `/api/v1/runs/{testID}` | One run: its agents, and each checkpoint with identifier, current round, target count and joined members |
-| `GET` | `/ui` | Auto-refreshing operator page for the two endpoints above |
+| `GET` | `/api/v1/runs/{testID}/data` | The run's stored payload, as an opaque download |
+| `POST` | `/api/v1/runs/{testID}/checkpoints/release` | Force-releases the round in progress on the checkpoint named in the body |
+| `DELETE` | `/api/v1/runs/{testID}/connections/{connID}` | Disconnects one agent, freeing its slot in every barrier it joined |
+| `DELETE` | `/api/v1/runs/{testID}` | Deletes the run and its stored data, as `DELETE /tests/{testID}` does |
+| `GET` | `/ui` | Auto-refreshing operator page |
 
 The UI is embedded in the binary and loads nothing from the network, so it works
 on an air-gapped CI box. It is served through the standard `401` challenge, so a
 browser will prompt for the same credentials.
 
+A forced release reaches the waiting agents in the usual checkpoint envelope,
+with `"reason": "operator_released"` and `"finished": false`: they resume
+together, but the barrier they were waiting for was not met.
+
 > [!NOTE]
-> These routes only read. They never release a barrier or change stored data,
-> and they report the **size** of a run's stored data rather than its contents.
-> Agents are numbered per run from zero in arrival order; numbers are not
-> reused, so a gap means an agent disconnected.
+> `/api/v1/runs/{testID}/data` is the only route that returns stored contents.
+> Every other response reports the **size** of a run's data rather than its
+> contents. Agents are numbered per run from zero in arrival order; numbers are
+> not reused, so a gap means an agent disconnected.
 
 ### WebSocket
 

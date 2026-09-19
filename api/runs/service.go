@@ -128,8 +128,9 @@ func (s *Service) ReadTestData(ctx context.Context, testID int) ([]byte, error) 
 }
 
 // DataSize reports the size in bytes of a run's stored payload, and whether
-// there is one. It never reads the payload: the monitoring API reports sizes
-// and counts, never contents.
+// there is one. It never reads the payload: the run views report sizes and
+// counts, and a payload is served only by the one endpoint that exists to
+// serve it.
 func (s *Service) DataSize(ctx context.Context, testID int) (int, bool, error) {
 	return s.store.DataSize(ctx, testID)
 }

@@ -41,7 +41,8 @@ func NewRouter(a *app.App) (http.Handler, error) {
 
 	runs.RegisterTestsRoutes(router, a.Service, a.Auth, a.Log)
 
-	// Read-only monitoring API and operator page, behind the same validator.
+	// Monitoring, the operator overrides and the UI page, behind the same
+	// validator.
 	monitor.RegisterRoutes(router, a)
 
 	return router, nil

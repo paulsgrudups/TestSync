@@ -77,9 +77,33 @@ func RegisterTestsRoutes(
 	subrouter.HandleFunc(``, svc.createHandler).Methods(http.MethodPost)
 	subrouter.HandleFunc(`/`, svc.readHandler).Methods(http.MethodGet)
 	subrouter.HandleFunc(``, svc.readHandler).Methods(http.MethodGet)
+	subrouter.HandleFunc(`/`, svc.updateHandler).Methods(http.MethodPut)
+	subrouter.HandleFunc(``, svc.updateHandler).Methods(http.MethodPut)
+	subrouter.HandleFunc(`/`, svc.DeleteRunHandler).Methods(http.MethodDelete)
+	subrouter.HandleFunc(``, svc.DeleteRunHandler).Methods(http.MethodDelete)
 }
 
+// createHandler stores a payload for a run that has none, refusing one that
+// already has data with 409.
 func (s *Service) createHandler(w http.ResponseWriter, r *http.Request) {
+	s.storeHandler(w, r, s.CreateTestData)
+}
+
+// updateHandler replaces a run's payload, whether or not it had one. Replacing
+// is the whole point of the route, so unlike createHandler it never reports a
+// conflict: [Service.UpdateTestData] does not raise one.
+func (s *Service) updateHandler(w http.ResponseWriter, r *http.Request) {
+	s.storeHandler(w, r, s.UpdateTestData)
+}
+
+// storeHandler is the body of both write routes. They differ only in which
+// store operation they call: the size limit, the error mapping and the echoed
+// response are the same for both, and two copies would be two places for
+// limits.max_data_bytes to be enforced differently.
+func (s *Service) storeHandler(
+	w http.ResponseWriter, r *http.Request,
+	store func(ctx context.Context, testID int, data []byte) error,
+) {
 	ctx := r.Context()
 
 	testID, err := GetPathID(w, r, "testID")
@@ -96,7 +120,7 @@ func (s *Service) createHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.CreateTestData(ctx, testID, body); err != nil {
+	if err := store(ctx, testID, body); err != nil {
 		if errors.Is(err, ErrTestExists) {
 			utils.HTTPError(
 				w, "Provided test already has set data", http.StatusConflict,

@@ -101,6 +101,16 @@ func (t *Test) GetConnection(id ConnID) *wsutil.Client {
 	return t.connections[id]
 }
 
+// connectionIDs returns the IDs currently registered, in no particular order.
+// It is a snapshot: the caller works from it without holding t.mu, so a
+// connection may be gone by the time the caller reaches it.
+func (t *Test) connectionIDs() []ConnID {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	return slices.Collect(maps.Keys(t.connections))
+}
+
 // ConnectionCount returns the number of connections currently registered. It
 // counts live connections only: a disconnected agent stops being counted
 // within one command round-trip of its reader exiting.
