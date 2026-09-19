@@ -67,11 +67,10 @@ func (s *Service) CreateTestData(ctx context.Context, testID int, data []byte) e
 		return err
 	}
 
-	if _, ok := s.registry.Get(testID); ok {
-		return ErrTestExists
-	}
-
-	if _, ok, err := s.store.LoadData(ctx, testID); err != nil {
+	// Only the store says whether a payload exists. A registered run is not
+	// one: agents connecting over WebSocket register the run before anybody
+	// has stored anything, and seeding it afterwards is the ordinary flow.
+	if _, ok, err := s.store.DataSize(ctx, testID); err != nil {
 		return err
 	} else if ok {
 		return ErrTestExists
@@ -160,6 +159,12 @@ func (s *Service) registerRun(testID int) error {
 	return err
 }
 
+// Ready reports whether the service can do its job right now, which today
+// means whether its store answers a query. It backs the readiness probe.
+func (s *Service) Ready(ctx context.Context) error {
+	return s.store.Ping(ctx)
+}
+
 // missingStore stands in for a store that was never supplied. It reports the
 // misconfiguration on every call rather than letting a nil interface panic in
 // a request goroutine.
@@ -182,5 +187,7 @@ func (missingStore) DataSizes(context.Context) (map[int]int, error) { return nil
 func (missingStore) DeleteOlderThanExcept(context.Context, time.Time, []int) error {
 	return ErrNoDataStore
 }
+
+func (missingStore) Ping(context.Context) error { return ErrNoDataStore }
 
 func (missingStore) Close() error { return nil }

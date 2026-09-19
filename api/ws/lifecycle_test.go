@@ -279,6 +279,8 @@ func (panickingStore) DataSizes(_ context.Context) (map[int]int, error) {
 	return map[int]int{}, nil
 }
 
+func (panickingStore) Ping(_ context.Context) error { return nil }
+
 func (panickingStore) Close() error { return nil }
 
 // TestPanicInHandlerKillsOnlyOneConnection is the STAB-1 regression test.
@@ -292,7 +294,7 @@ func TestPanicInHandlerKillsOnlyOneConnection(t *testing.T) {
 	application := apptest.NewInsecure(t)
 	ws := &Server{
 		Handler: NewCommandHandler(
-			runs.NewService(panickingStore{}, application.Registry, nil), nil,
+			runs.NewService(panickingStore{}, application.Registry, nil), nil, nil,
 		),
 		app: application,
 	}

@@ -317,6 +317,7 @@ func (cp *checkpoint) endRoundLocked(reason, note string) *release {
 	}
 
 	cp.stopTimerLocked()
+	cp.test.releases.Inc(reason)
 
 	// The next round starts clean, on the same identifier: this is what makes
 	// the barrier reusable (CONC-8).

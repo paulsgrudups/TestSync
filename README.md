@@ -31,6 +31,7 @@ store that state and a barrier to wait on.
 - [Authentication](#authentication)
 - [API](#api)
   - [HTTP](#http)
+  - [Probes and metrics](#probes-and-metrics)
   - [Monitoring and management](#monitoring-and-management)
   - [WebSocket](#websocket)
   - [Checkpoints](#checkpoints)
@@ -201,15 +202,54 @@ Base: `http://<host>:<http_port>`
 
 | Method | Route | Description | Auth |
 | --- | --- | --- | --- |
-| `POST` | `/tests/{testID}` | Stores the raw request body as test data, refusing a run that already has some | Basic |
-| `GET` | `/tests/{testID}` | Returns the stored raw test data | Basic |
-| `PUT` | `/tests/{testID}` | Replaces the stored test data, whether or not there was any | Basic |
+| `POST` | `/tests/{testID}` | Stores the raw request body as test data — `201` with `Location`; `409` if the run already has data | Basic |
+| `GET` | `/tests/{testID}` | Returns the stored raw test data as `application/octet-stream` | Basic |
+| `PUT` | `/tests/{testID}` | Replaces the stored test data, whether or not there was any — `200` | Basic |
 | `DELETE` | `/tests/{testID}` | Deletes the run and its stored data — `204`, with `X-TestSync-Connections-Dropped` | Basic |
-| `GET` | `/health` | Returns `{"status":"ok"}` | None |
+| `GET` | `/` | Describes the server: `{"service","version","protocol","docs"}` | None |
 
-Errors are JSON — `{"code": <int>, "error": "<message>"}` — while successful
-reads return raw bytes. Failures that a client may want to branch on carry a
+Both writes answer with a receipt, `{"test_id": <int>, "bytes": <int>}`, rather
+than echoing the payload back. Errors are JSON —
+`{"code": <int>, "error": "<message>"}` — while successful reads return raw
+bytes. Failures that a client may want to branch on carry a
 stable `"reason"` as well, such as `run_not_found` or `no_round_in_progress`.
+
+### Probes and metrics
+
+| Method | Route | Description | Auth |
+| --- | --- | --- | --- |
+| `GET` | `/healthz` | Liveness: `200 {"status":"ok"}` while the process can answer. `/health` is the same probe under its original name | None |
+| `GET` | `/readyz` | Readiness: `200` while storage answers a query, `503 {"status":"not_ready",...}` otherwise | None |
+| `GET` | `/version` | `{"version","commit","go_version","protocol"}` | None |
+| `GET` | `/metrics` | Prometheus text format | Basic |
+
+Point a liveness probe at `/healthz` and a readiness probe at `/readyz`: a
+server whose database is gone should stop receiving traffic, but restarting it
+would not bring the database back.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `testsync_runs_active` | gauge | Test runs registered |
+| `testsync_connections_active` | gauge | Agents connected over WebSocket |
+| `testsync_checkpoints_waiting` | gauge | Checkpoints with a round in progress |
+| `testsync_checkpoint_releases_total{reason}` | counter | Ended rounds by reason; alert on `reason="timeout"` and `"participant_lost"` |
+| `testsync_requests_total{route,code}` | counter | HTTP requests by route template and status |
+| `testsync_websocket_commands_total{command,outcome}` | counter | WebSocket commands by name and `ok` or error code |
+| `testsync_build_info{version,commit,go_version}` | gauge | Always `1` |
+
+Labels only ever take values the server chose — a route template, never a path
+with a test ID in it — so the number of series stays bounded.
+
+```yaml
+scrape_configs:
+  - job_name: testsync
+    basic_auth: { username: exampleUserName, password: examplePassWord }
+    static_configs: [{ targets: ["testsync:9104"] }]
+```
+
+A release build stamps its version with
+`-ldflags "-X github.com/paulsgrudups/testsync/internal/buildinfo.version=v0.1.0"`;
+an unstamped build reports `dev` and the commit it was built from.
 
 ### Monitoring and management
 

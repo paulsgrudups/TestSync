@@ -57,7 +57,7 @@ func httpCreate(baseURL string, testID int, payload []byte, user, pass string) e
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("POST failed: status=%d body=%s", resp.StatusCode, string(body))
 	}

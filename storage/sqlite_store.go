@@ -218,6 +218,18 @@ func (s *SQLiteStore) DataSize(ctx context.Context, testID int) (int, bool, erro
 	return int(size.Int64), true, nil
 }
 
+// Ping runs a trivial query. PingContext alone is not enough: the driver opens
+// the file lazily, so it can succeed on a database no query would reach.
+func (s *SQLiteStore) Ping(ctx context.Context) error {
+	var one int
+
+	if err := s.db.QueryRowContext(ctx, `SELECT 1`).Scan(&one); err != nil {
+		return fmt.Errorf("sqlite is not answering queries: %w", err)
+	}
+
+	return nil
+}
+
 // DataSizes returns the size of every stored payload, keyed by test ID.
 func (s *SQLiteStore) DataSizes(ctx context.Context) (map[int]int, error) {
 	rows, err := s.db.QueryContext(

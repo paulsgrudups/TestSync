@@ -135,6 +135,12 @@ func TestReleaseCheckpointKeepsTheNote(t *testing.T) {
 	if result.Reason != ReasonOperatorReleased {
 		t.Fatalf("the note displaced the reason: got %q", result.Reason)
 	}
+
+	// The release is counted under its fixed reason, never under the note:
+	// the note is free text and would make a series per sentence.
+	if got := registry.Releases().Value(ReasonOperatorReleased); got != 1 {
+		t.Fatalf("expected one operator release counted, got %d", got)
+	}
 }
 
 // TestReleaseCheckpointFailures covers each refusal the management API turns

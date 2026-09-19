@@ -2,6 +2,7 @@ package runs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/paulsgrudups/testsync/api/auth"
+	"github.com/paulsgrudups/testsync/internal/metrics"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
@@ -46,6 +48,10 @@ type Test struct {
 	// leadTime is how far ahead a release tells the agents to resume. Like
 	// limits it is fixed by the registry that created the run.
 	leadTime time.Duration
+
+	// releases is the registry's counter of ended rounds; nil for a Test
+	// built outside a registry, which counts nothing.
+	releases *metrics.CounterVec
 
 	// log already carries this run's test_id, so anything logged about the
 	// run or its barriers is attributable without repeating it.
@@ -98,25 +104,33 @@ func RegisterTestsRoutes(
 }
 
 // createHandler stores a payload for a run that has none, refusing one that
-// already has data with 409.
+// already has data with 409. It answers 201 with the payload's Location.
 func (s *Service) createHandler(w http.ResponseWriter, r *http.Request) {
-	s.storeHandler(w, r, s.CreateTestData)
+	s.storeHandler(w, r, s.CreateTestData, http.StatusCreated)
 }
 
 // updateHandler replaces a run's payload, whether or not it had one. Replacing
 // is the whole point of the route, so unlike createHandler it never reports a
 // conflict: [Service.UpdateTestData] does not raise one.
 func (s *Service) updateHandler(w http.ResponseWriter, r *http.Request) {
-	s.storeHandler(w, r, s.UpdateTestData)
+	s.storeHandler(w, r, s.UpdateTestData, http.StatusOK)
+}
+
+// storedResponse is the body of a successful write. The payload itself is not
+// echoed: the caller already has it, and it can be megabytes (API-4).
+type storedResponse struct {
+	TestID int `json:"test_id"`
+	Bytes  int `json:"bytes"`
 }
 
 // storeHandler is the body of both write routes. They differ only in which
-// store operation they call: the size limit, the error mapping and the echoed
-// response are the same for both, and two copies would be two places for
+// store operation they call and the status they answer with: the size limit,
+// the error mapping and the response body are the same for both, and two copies would be two places for
 // limits.max_data_bytes to be enforced differently.
 func (s *Service) storeHandler(
 	w http.ResponseWriter, r *http.Request,
 	store func(ctx context.Context, testID int, data []byte) error,
+	status int,
 ) {
 	ctx := r.Context()
 
@@ -134,7 +148,7 @@ func (s *Service) storeHandler(
 		return
 	}
 
-	if err := store(ctx, testID, body); err != nil {
+	if err = store(ctx, testID, body); err != nil {
 		if errors.Is(err, ErrTestExists) {
 			utils.HTTPError(
 				w, "Provided test already has set data", http.StatusConflict,
@@ -153,7 +167,20 @@ func (s *Service) storeHandler(
 
 	logger.InfoContext(ctx, "stored test data", "bytes", len(body))
 
-	writeResponse(w, body, http.StatusOK)
+	encoded, err := json.Marshal(storedResponse{TestID: testID, Bytes: len(body)})
+	if err != nil {
+		logger.ErrorContext(ctx, "could not encode the response", "error", err)
+		utils.HTTPError(w, "Stored, but could not encode the response", http.StatusInternalServerError)
+
+		return
+	}
+
+	if status == http.StatusCreated {
+		w.Header().Set("Location", "/tests/"+strconv.Itoa(testID))
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writeResponse(w, encoded, status)
 }
 
 func (s *Service) readHandler(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +208,10 @@ func (s *Service) readHandler(w http.ResponseWriter, r *http.Request) {
 
 	logger.InfoContext(ctx, "read test data", "bytes", len(data))
 
+	// A payload is opaque bytes: the server never learned what they are, so
+	// it says so rather than letting a browser guess from the contents.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	writeResponse(w, data, http.StatusOK)
 }
 

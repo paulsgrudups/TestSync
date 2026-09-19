@@ -10,24 +10,29 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/paulsgrudups/testsync/api/runs"
+	"github.com/paulsgrudups/testsync/internal/metrics"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
 // CommandHandler processes WebSocket commands.
 type CommandHandler struct {
-	service *runs.Service
-	log     *slog.Logger
+	service  *runs.Service
+	commands *metrics.CounterVec
+	log      *slog.Logger
 }
 
-// NewCommandHandler creates a handler over the given service. A nil logger
+// NewCommandHandler creates a handler over the given service. commands counts
+// the handled commands by name and outcome, and may be nil. A nil logger
 // discards.
-func NewCommandHandler(service *runs.Service, logger *slog.Logger) *CommandHandler {
+func NewCommandHandler(
+	service *runs.Service, commands *metrics.CounterVec, logger *slog.Logger,
+) *CommandHandler {
 	if logger == nil {
 		logger = utils.DiscardLogger()
 	}
 
-	return &CommandHandler{service: service, log: logger}
+	return &CommandHandler{service: service, commands: commands, log: logger}
 }
 
 // Handle processes a single WebSocket message and answers it. Every command
@@ -44,6 +49,7 @@ func (h *CommandHandler) Handle(
 			code: CodeInvalidMessage, message: "the message is not a JSON envelope", err: err,
 		}
 		h.reportFailure(ctx, t, connID, wsutil.Message{}, err)
+		h.count("", err)
 
 		return err
 	}
@@ -51,6 +57,7 @@ func (h *CommandHandler) Handle(
 	if err := validateRequestID(m.ID); err != nil {
 		// The id is not echoed: it is the thing that could not be trusted.
 		h.reportFailure(ctx, t, connID, wsutil.Message{Command: m.Command}, err)
+		h.count(m.Command, err)
 
 		return err
 	}
@@ -64,7 +71,28 @@ func (h *CommandHandler) Handle(
 		h.reportFailure(ctx, t, connID, m, err)
 	}
 
+	h.count(m.Command, err)
+
 	return err
+}
+
+// count records one handled command. A command name the server does not know
+// is counted as "unknown" - the name is client-supplied, and a label per
+// misspelling would be a series per misspelling.
+func (h *CommandHandler) count(command string, err error) {
+	switch command {
+	case CommandReadData, CommandUpdateData, CommandGetConnectionCount,
+		CommandWaitCheckpoint, CommandClose:
+	default:
+		command = "unknown"
+	}
+
+	outcome := "ok"
+	if err != nil {
+		outcome, _ = failureCode(err)
+	}
+
+	h.commands.Inc(command, outcome)
 }
 
 // validateRequestID accepts an absent id, a JSON string or a JSON number, of

@@ -29,5 +29,10 @@ type DataStore interface {
 	// one per run.
 	DataSizes(ctx context.Context) (map[int]int, error)
 
+	// Ping reports whether the store can serve a query right now. It is what
+	// the readiness probe asks: a server whose storage is gone must stop
+	// receiving traffic even though its process is alive.
+	Ping(ctx context.Context) error
+
 	Close() error
 }

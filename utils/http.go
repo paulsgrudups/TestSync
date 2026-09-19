@@ -6,9 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gorilla/mux"
+
+	"github.com/paulsgrudups/testsync/internal/metrics"
 )
 
 // ErrorResponse will be sent in case an error occurs during request processing.
@@ -66,6 +72,33 @@ func LogRequests(logger *slog.Logger) func(http.Handler) http.Handler {
 				"status", rw.statusCode,
 				"duration", time.Since(start).String(),
 			)
+		})
+	}
+}
+
+// routePattern matches a mux path variable with its pattern, {testID:\d+}, so
+// that a route label reads {testID}.
+var routePattern = regexp.MustCompile(`\{([^:}]+):(?:[^{}]|\{[^{}]*\})*\}`)
+
+// CountRequests returns middleware that counts every request it sees by the
+// matched route's template and the response status. The template, never the
+// raw path, is the label: a path carries a test ID, and a label per test ID
+// is a series per test run.
+func CountRequests(counter *metrics.CounterVec) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rw := newResponseWriter(w)
+
+			next.ServeHTTP(rw, r)
+
+			route := "unmatched"
+			if current := mux.CurrentRoute(r); current != nil {
+				if template, err := current.GetPathTemplate(); err == nil {
+					route = routePattern.ReplaceAllString(template, "{$1}")
+				}
+			}
+
+			counter.Inc(route, strconv.Itoa(rw.statusCode))
 		})
 	}
 }

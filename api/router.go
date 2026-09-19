@@ -4,7 +4,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -23,21 +22,11 @@ import (
 func NewRouter(a *app.App) (http.Handler, error) {
 	router := mux.NewRouter().StrictSlash(false)
 
-	if err := registerMiddlewares(router, a.Log); err != nil {
+	if err := registerMiddlewares(router, a); err != nil {
 		return nil, fmt.Errorf("failed to register middlewares: %w", err)
 	}
 
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if _, err := fmt.Fprintln(w, "A random proverb that is very intellectual."); err != nil {
-			a.Log.DebugContext(r.Context(), "failed to write the root response", "error", err)
-		}
-	})
-
-	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`)) // nolint: gosec, errcheck
-	})
+	registerOperationalRoutes(router, a)
 
 	runs.RegisterTestsRoutes(router, a.Service, a.Auth, a.Log)
 
@@ -48,7 +37,7 @@ func NewRouter(a *app.App) (http.Handler, error) {
 	return router, nil
 }
 
-func registerMiddlewares(r *mux.Router, logger *slog.Logger) error {
+func registerMiddlewares(r *mux.Router, a *app.App) error {
 	body, err := json.Marshal(utils.ErrorResponse{
 		Code:  http.StatusServiceUnavailable,
 		Error: "Request timed out",
@@ -61,11 +50,15 @@ func registerMiddlewares(r *mux.Router, logger *slog.Logger) error {
 		return http.TimeoutHandler(next, 10*time.Second, string(body))
 	}
 
-	// Outermost, so that it also catches the panic http.TimeoutHandler
-	// re-raises in this goroutine after its own handler goroutine panicked.
-	r.Use(utils.RecoverPanics(logger))
+	// Outermost, so a request is counted with the status its client actually
+	// received: the 500 of a recovered panic, or the 503 of a timeout.
+	r.Use(utils.CountRequests(a.Metrics.Requests))
+	// Outside the timeout, so that it also catches the panic
+	// http.TimeoutHandler re-raises in this goroutine after its own handler
+	// goroutine panicked.
+	r.Use(utils.RecoverPanics(a.Log))
 	r.Use(timeoutMW)
-	r.Use(utils.LogRequests(logger))
+	r.Use(utils.LogRequests(a.Log))
 
 	return nil
 }

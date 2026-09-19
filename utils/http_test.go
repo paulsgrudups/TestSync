@@ -66,3 +66,22 @@ func TestHTTPError_ResponseShape(t *testing.T) {
 		t.Fatalf("unexpected error response: %+v", resp)
 	}
 }
+
+// TestRoutePatternDropsVariablePatterns covers the route label: a variable's
+// pattern is dropped, including one with braces of its own, so labels read as
+// the route and a regex change is not a new series.
+func TestRoutePatternDropsVariablePatterns(t *testing.T) {
+	t.Parallel()
+
+	for template, want := range map[string]string{
+		`/tests/{testID:\d+}`:                         `/tests/{testID}`,
+		`/register/{testID:[0-9]{1,19}}`:              `/register/{testID}`,
+		`/runs/{testID:\d+}/connections/{connID:\d+}`: `/runs/{testID}/connections/{connID}`,
+		`/health`:       `/health`,
+		`/plain/{name}`: `/plain/{name}`,
+	} {
+		if got := routePattern.ReplaceAllString(template, "{$1}"); got != want {
+			t.Errorf("%s: got %s, want %s", template, got, want)
+		}
+	}
+}

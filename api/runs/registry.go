@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/paulsgrudups/testsync/internal/metrics"
 	"github.com/paulsgrudups/testsync/utils"
 )
 
@@ -28,6 +29,9 @@ type Registry struct {
 
 	// leadTime is stamped into every run, like limits.
 	leadTime time.Duration
+
+	// releases counts ended checkpoint rounds by reason, across every run.
+	releases *metrics.CounterVec
 
 	// log is stamped into every run this registry creates, so a line about a
 	// barrier can name the run it belongs to without the barrier having to
@@ -62,8 +66,13 @@ func NewRegistry(limits Limits, logger *slog.Logger, opts ...RegistryOption) *Re
 	reg := &Registry{
 		limits:   limits,
 		leadTime: DefaultReleaseLeadTime,
-		log:      logger,
-		tests:    make(map[int]*Test),
+		releases: metrics.NewCounterVec(
+			"testsync_checkpoint_releases_total",
+			"Checkpoint rounds ended, by reason. reason=\"timeout\" is the one to alert on.",
+			"reason",
+		),
+		log:   logger,
+		tests: make(map[int]*Test),
 	}
 
 	for _, opt := range opts {
@@ -84,6 +93,12 @@ func (reg *Registry) Limits() Limits {
 // to resume. Like the limits it is fixed at construction.
 func (reg *Registry) ReleaseLeadTime() time.Duration {
 	return reg.leadTime
+}
+
+// Releases returns the counter of ended checkpoint rounds, for the metrics
+// endpoint.
+func (reg *Registry) Releases() *metrics.CounterVec {
+	return reg.releases
 }
 
 // Get returns a run by ID, and whether it is registered.
@@ -128,6 +143,7 @@ func (reg *Registry) Ensure(id int) (*Test, error) {
 		Created:  time.Now().UTC(),
 		limits:   reg.limits,
 		leadTime: reg.leadTime,
+		releases: reg.releases,
 		log:      reg.log.With("test_id", id),
 	}
 	reg.tests[id] = created

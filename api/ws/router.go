@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/paulsgrudups/testsync/api/auth"
+	"github.com/paulsgrudups/testsync/internal/buildinfo"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
@@ -63,13 +65,23 @@ func newWSRouter(s *Server) http.Handler {
 	// A panic must cost at most one connection, never the process.
 	router.Use(utils.RecoverPanics(s.log()))
 
+	// The same descriptor the HTTP port serves, so whichever port a person
+	// finds first tells them what it is.
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if _, err := fmt.Fprintln(w, "WebSocket, reporting for duty!"); err != nil {
+		body, err := json.Marshal(buildinfo.Describe())
+		if err != nil {
+			utils.HTTPError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+		if _, err := w.Write(body); err != nil {
 			s.log().DebugContext(
 				r.Context(), "failed to write the websocket root response", "error", err,
 			)
 		}
-	})
+	}).Methods(http.MethodGet)
 
 	subrouter := router.PathPrefix("/register").Subrouter().StrictSlash(true)
 	s.register(subrouter)

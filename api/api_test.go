@@ -33,12 +33,22 @@ func TestCreateAndReadTestData(t *testing.T) {
 	postRec := httptest.NewRecorder()
 	handler.ServeHTTP(postRec, postReq)
 
-	if postRec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, postRec.Code)
+	// 201 with the new resource's location, and a short receipt rather than
+	// the payload echoed back (API-4).
+	if postRec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, postRec.Code)
 	}
 
-	if postRec.Body.String() != "payload" {
-		t.Fatalf("unexpected body: %q", postRec.Body.String())
+	if got := postRec.Header().Get("Location"); got != "/tests/123" {
+		t.Fatalf("expected Location /tests/123, got %q", got)
+	}
+
+	if got := postRec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("unexpected create Content-Type %q", got)
+	}
+
+	if want := `{"test_id":123,"bytes":7}`; postRec.Body.String() != want {
+		t.Fatalf("unexpected body: %q, want %q", postRec.Body.String(), want)
 	}
 
 	getReq := httptest.NewRequest(http.MethodGet, "/tests/123", nil)
@@ -48,6 +58,15 @@ func TestCreateAndReadTestData(t *testing.T) {
 
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, getRec.Code)
+	}
+
+	// The payload is opaque, and said to be, rather than left to sniffing.
+	if got := getRec.Header().Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("unexpected read Content-Type %q", got)
+	}
+
+	if got := getRec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("expected nosniff, got %q", got)
 	}
 
 	read, err := io.ReadAll(getRec.Body)

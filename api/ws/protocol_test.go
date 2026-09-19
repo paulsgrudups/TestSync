@@ -512,3 +512,32 @@ func TestCloseCommandAnswersEarlierCommandsFirst(t *testing.T) {
 		t.Fatalf("expected a normal closure, got %v", err)
 	}
 }
+
+// TestCommandsAreCounted covers testsync_websocket_commands_total: a command is
+// counted under its name and outcome, and a name the server does not know is
+// counted as "unknown" rather than under whatever the client sent.
+func TestCommandsAreCounted(t *testing.T) {
+	t.Parallel()
+
+	server, application := newIntegrationServer(t)
+
+	conn := dialRaw(t, server, "/register/995")
+
+	exchange(t, conn, `{"command":"get_connection_count"}`)
+	exchange(t, conn, `{"command":"x-made-up-1"}`)
+	exchange(t, conn, `{"command":"x-made-up-2"}`)
+
+	counter := application.Metrics.Commands
+
+	if got := counter.Value(CommandGetConnectionCount, "ok"); got != 1 {
+		t.Fatalf("expected one successful get_connection_count, got %d", got)
+	}
+
+	if got := counter.Value("unknown", CodeUnknownCommand); got != 2 {
+		t.Fatalf("expected two unknown commands, got %d", got)
+	}
+
+	if got := counter.Value("x-made-up-1", CodeUnknownCommand); got != 0 {
+		t.Fatal("a client-chosen command name became a label")
+	}
+}

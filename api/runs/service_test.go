@@ -41,6 +41,29 @@ func TestService_CreateDuplicate(t *testing.T) {
 	}
 }
 
+// TestCreateSeedsARunAgentsAlreadyJoined covers the ordinary order of events:
+// the agents connect first, which registers the run, and the seed payload is
+// POSTed after. Create used to treat a registered run as one that already had
+// data, and refused the seed with 409 and "already has set data" although
+// nothing had ever been stored.
+func TestCreateSeedsARunAgentsAlreadyJoined(t *testing.T) {
+	t.Parallel()
+
+	registry, service := newTestSetup(t, DefaultLimits())
+
+	if _, err := registry.Ensure(11); err != nil {
+		t.Fatalf("failed to register the run: %v", err)
+	}
+
+	if err := service.CreateTestData(t.Context(), 11, []byte("seed")); err != nil {
+		t.Fatalf("seeding a run with no data was refused: %v", err)
+	}
+
+	if err := service.CreateTestData(t.Context(), 11, []byte("again")); !errors.Is(err, ErrTestExists) {
+		t.Fatalf("expected the second create to conflict, got %v", err)
+	}
+}
+
 // TestService_WithoutStore covers the store guard. A service resolves its
 // store once, at construction, so one built without a store can never acquire
 // one: it reports the misconfiguration rather than dereferencing nil in a

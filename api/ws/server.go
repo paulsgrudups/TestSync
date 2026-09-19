@@ -64,7 +64,7 @@ func StartWebSocketServer(a *app.App) *Server {
 	port := a.Config.WSPort
 
 	s := &Server{
-		Handler:   NewCommandHandler(a.Service, a.Log),
+		Handler:   NewCommandHandler(a.Service, a.Metrics.Commands, a.Log),
 		app:       a,
 		listenErr: make(chan error, 1),
 	}

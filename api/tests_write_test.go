@@ -35,7 +35,7 @@ func TestPutReplacesTestData(t *testing.T) {
 
 	handler := newTestRouter(t)
 
-	if rec := request(t, handler, http.MethodPost, "/tests/200", []byte("first")); rec.Code != http.StatusOK {
+	if rec := request(t, handler, http.MethodPost, "/tests/200", []byte("first")); rec.Code != http.StatusCreated {
 		t.Fatalf("failed to store the first payload: %d (%s)", rec.Code, rec.Body.String())
 	}
 
@@ -49,9 +49,14 @@ func TestPutReplacesTestData(t *testing.T) {
 		t.Fatalf("expected status %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
 
-	// PUT echoes what it stored, exactly as POST does.
-	if rec.Body.String() != "second" {
-		t.Fatalf("expected the stored body echoed back, got %q", rec.Body.String())
+	// PUT answers with the same receipt as POST, and no Location: the
+	// resource already had one.
+	if want := `{"test_id":200,"bytes":6}`; rec.Body.String() != want {
+		t.Fatalf("unexpected body %q, want %q", rec.Body.String(), want)
+	}
+
+	if got := rec.Header().Get("Location"); got != "" {
+		t.Fatalf("PUT set a Location: %q", got)
 	}
 
 	if read := request(t, handler, http.MethodGet, "/tests/200", nil); read.Body.String() != "second" {
@@ -113,7 +118,7 @@ func TestDeleteTestRemovesTheRunAndItsData(t *testing.T) {
 		t.Fatalf("failed to create the router: %v", err)
 	}
 
-	if rec := request(t, handler, http.MethodPost, "/tests/203", []byte("payload")); rec.Code != http.StatusOK {
+	if rec := request(t, handler, http.MethodPost, "/tests/203", []byte("payload")); rec.Code != http.StatusCreated {
 		t.Fatalf("failed to store the payload: %d (%s)", rec.Code, rec.Body.String())
 	}
 
