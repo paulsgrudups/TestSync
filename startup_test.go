@@ -35,6 +35,16 @@ func writeConfig(t *testing.T, body string) string {
 	return dir
 }
 
+// loadConfig loads the file in dir with no environment and no flags. required
+// is what an explicit -c means: the file must be there.
+func loadConfig(t *testing.T, dir string, required bool) (utils.Config, error) {
+	t.Helper()
+
+	loaded, err := utils.Load(utils.LoadOptions{Dir: dir, RequireFile: required})
+
+	return loaded.Config, err
+}
+
 // TestStartupErrorsAreReadable covers STAB-7: an operator mistake is a
 // sentence they can act on, not a runtime panic with a stack trace. main turns
 // each of these into one line on stderr and exit code 1.
@@ -52,7 +62,9 @@ func TestStartupErrorsAreReadable(t *testing.T) {
 		{
 			name:    "missing config file",
 			missing: true,
-			wants:   []string{"no configuration file at", "configuration.json", "-c"},
+			wants: []string{
+				"no configuration file at", "configuration.json", "-c", "TESTSYNC_",
+			},
 		},
 		{
 			name:  "unparseable config file",
@@ -93,7 +105,7 @@ func TestStartupErrorsAreReadable(t *testing.T) {
 				dir = writeConfig(t, tc.body)
 			}
 
-			conf, err := loadConfig(dir)
+			conf, err := loadConfig(t, dir, true)
 			if err == nil {
 				_, err = setupLogging(conf.Logging)
 			}
@@ -157,7 +169,7 @@ func TestListenReportsBindFailure(t *testing.T) {
 func TestConfigDefaultsAreUsable(t *testing.T) {
 	dir := writeConfig(t, `{"sync_client":{"username":"u","password":"p"}}`)
 
-	conf, err := loadConfig(dir)
+	conf, err := loadConfig(t, dir, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -273,5 +285,99 @@ func TestShutdownLetsInFlightRequestsFinish(t *testing.T) {
 	// janitor is stopped rather than left sweeping a closed database.
 	if _, _, err := store.LoadData(t.Context(), 7); err == nil {
 		t.Fatal("the data store was left open after shutdown")
+	}
+}
+
+// TestStartsFromTheEnvironmentAlone is the API-5 and SEC-6 done-condition: with
+// no configuration file anywhere, one environment variable holding the
+// password is enough for a server that requires authentication.
+func TestStartsFromTheEnvironmentAlone(t *testing.T) {
+	env := map[string]string{"TESTSYNC_SYNC_CLIENT_PASSWORD": "s3cret"}
+
+	loaded, err := utils.Load(utils.LoadOptions{
+		Dir: t.TempDir(),
+		LookupEnv: func(name string) (string, bool) {
+			v, ok := env[name]
+			return v, ok
+		},
+	})
+	if err != nil {
+		t.Fatalf("could not load a configuration from the environment: %v", err)
+	}
+
+	if loaded.File != "" {
+		t.Fatalf("expected no configuration file, got %s", loaded.File)
+	}
+
+	validator, err := setupAuth(loaded.Config, false, utils.DiscardLogger())
+	if err != nil {
+		t.Fatalf("authentication could not be set up: %v", err)
+	}
+
+	if validator.Disabled() || !validator.Validate(utils.DefaultUsername, "s3cret") {
+		t.Fatal("the environment's password is not the one the server checks")
+	}
+}
+
+// TestStartupWithoutCredentialsSaysHowToProvideThem covers the other side: no
+// file and no variables is refused, and the message names the variable.
+func TestStartupWithoutCredentialsSaysHowToProvideThem(t *testing.T) {
+	loaded, err := utils.Load(utils.LoadOptions{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("a missing optional file must not be an error: %v", err)
+	}
+
+	_, err = setupAuth(loaded.Config, false, utils.DiscardLogger())
+	if err == nil {
+		t.Fatal("expected a server with no credentials to be refused")
+	}
+
+	// serve wraps the refusal in authError; that is what the operator reads.
+	if !strings.Contains(authError(err).Error(), "TESTSYNC_SYNC_CLIENT_PASSWORD") {
+		t.Fatalf("the error does not say how to provide a password: %v", err)
+	}
+}
+
+// TestExampleConfigurationIsCurrent loads the shipped example the way the
+// README tells a new user to: every key in it must be one the server knows,
+// and every value must be the default, so the file cannot drift from the code
+// it documents.
+func TestExampleConfigurationIsCurrent(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("config", "configuration.example.json"))
+	if err != nil {
+		t.Fatalf("the example configuration is missing: %v", err)
+	}
+
+	loaded, err := utils.Load(utils.LoadOptions{
+		Dir: writeConfig(t, string(body)), RequireFile: true,
+	})
+	if err != nil {
+		t.Fatalf("the example does not load: %v", err)
+	}
+
+	for _, warning := range loaded.Warnings {
+		if !strings.Contains(warning, "readable by every user") {
+			t.Errorf("the example draws a warning: %s", warning)
+		}
+	}
+
+	defaults := utils.Config{SyncClient: loaded.Config.SyncClient}
+	utils.ApplyDefaults(&defaults)
+
+	if loaded.Config != defaults {
+		t.Fatalf("the example's values are not the defaults:\n example: %+v\ndefaults: %+v",
+			loaded.Config, defaults)
+	}
+
+	// Every setting the server has appears in the example.
+	for name, key := range utils.EnvVars() {
+		if key == "sync_client.password_file" || key == "storage.type" {
+			continue // alternatives and legacy keys, documented elsewhere
+		}
+
+		leaf := key[strings.LastIndex(key, ".")+1:]
+		if !strings.Contains(string(body), `"`+leaf+`"`) {
+			t.Errorf("the example is missing %s (%s)", key, name)
+		}
 	}
 }

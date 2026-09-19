@@ -1,0 +1,32 @@
+{
+  "http_port": 9104,
+  "ws_port": 9105,
+  "logging": {
+    "level": "INFO",
+    "format": "json",
+    "dir": "."
+  },
+  "auth": {
+    "mode": "basic"
+  },
+  "sync_client": {
+    "username": "testsync",
+    "password": "change-me"
+  },
+  "storage": {
+    "sqlite_path": "./testsync.db"
+  },
+  "cleanup": {
+    "interval": "1h",
+    "retention": "12h"
+  },
+  "limits": {
+    "max_tests": 10000,
+    "max_connections_per_test": 256,
+    "max_checkpoints_per_test": 256,
+    "max_data_bytes": 10485760
+  },
+  "checkpoint": {
+    "release_lead_time": "500ms"
+  }
+}

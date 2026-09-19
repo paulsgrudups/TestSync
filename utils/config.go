@@ -150,8 +150,14 @@ type LimitsConfig struct {
 
 // BasicCredentials defines generic client details.
 type BasicCredentials struct {
+	// Username defaults to "testsync" when only a password is configured.
 	Username string `json:"username"`
 	Password string `json:"password"`
+
+	// PasswordFile names a file holding the password, such as a Docker or
+	// Kubernetes secret mounted at /run/secrets/testsync. It is read once at
+	// startup and is an alternative to Password, never an addition to it.
+	PasswordFile string `json:"password_file"`
 }
 
 // AuthConfig defines how incoming requests are authenticated.

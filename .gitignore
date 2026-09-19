@@ -15,7 +15,9 @@
 # vendor/
 
 *.log
-config
+# Local configuration may hold credentials. Only the example is tracked.
+/config/*
+!/config/configuration.example.json
 node_modules
 docs
 

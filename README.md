@@ -47,27 +47,18 @@ store that state and a barrier to wait on.
 
 **1. Install Go** (1.25 or newer).
 
-**2. Create a config directory** containing a file named `configuration.json`:
+**2. Run the server** with a password — nothing else is needed:
 
 ```bash
-mkdir -p config
+TESTSYNC_SYNC_CLIENT_PASSWORD=change-me go run .
 ```
 
-```json
-{
-  "http_port": 9104,
-  "ws_port": 9105,
-  "sync_client": {
-    "username": "exampleUserName",
-    "password": "examplePassWord"
-  }
-}
-```
-
-**3. Run the server**, pointing `-c` at the directory:
+Agents authenticate as `testsync` / `change-me`. To keep settings in a file
+instead, copy the example and point `-c` at its directory:
 
 ```bash
-go run main.go -c ./config
+mkdir -p config && cp config/configuration.example.json config/configuration.json
+go run . -c ./config
 ```
 
 > [!IMPORTANT]
@@ -79,17 +70,42 @@ Then open <http://localhost:9104/ui> to watch runs as they happen.
 
 ## Configuration
 
-Every key except `sync_client` may be omitted. Defaults are shown below.
+Settings come from four layers, each overriding the one before:
+
+1. **Defaults**, shown below.
+2. **`configuration.json`** in the `-c` directory (default `./config`). The file
+   is optional; a missing one is an error only when `-c` was given explicitly.
+   Keys the server does not know are logged as warnings, so a typo does not
+   silently keep a default.
+3. **Environment variables.** Every key has one: `TESTSYNC_` followed by the
+   key in upper case, with dots as underscores — `logging.level` is
+   `TESTSYNC_LOGGING_LEVEL`, `sync_client.password` is
+   `TESTSYNC_SYNC_CLIENT_PASSWORD`. A variable set to an empty string is
+   ignored.
+4. **Flags:** `--http-port`, `--ws-port`, `--log-level`, `--log-format`,
+   `--sqlite-path` and `--insecure-no-auth`.
+
+A password is required unless authentication is disabled. Give it in exactly
+one of these ways; the username defaults to `testsync` when only a password is
+set:
+
+| Source | Example |
+| --- | --- |
+| Environment | `TESTSYNC_SYNC_CLIENT_PASSWORD=change-me` |
+| Secret file | `TESTSYNC_SYNC_CLIENT_PASSWORD_FILE=/run/secrets/testsync` — the file's trailing newline is ignored |
+| Config file | `"sync_client": {"password": "..."}` — warned about if the file is readable by every user |
 
 | Key | Default | Description |
 | --- | --- | --- |
 | `http_port` | `9104` | HTTP API port |
 | `ws_port` | `9105` | WebSocket port |
 | `logging.level` | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR` |
+| `logging.format` | `json` | `json` or `text` |
 | `logging.dir` | `.` | Directory for `test-sync.log` |
 | `auth.mode` | `basic` | `basic`, or `none` to disable auth |
-| `sync_client.username` | — | **Required** |
-| `sync_client.password` | — | **Required** |
+| `sync_client.username` | `testsync` | Username agents authenticate with |
+| `sync_client.password` | — | **Required**, unless `password_file` is set |
+| `sync_client.password_file` | — | File holding the password, such as a mounted secret |
 | `storage.sqlite_path` | `./testsync.db` | Database file; created if absent |
 | `cleanup.interval` | `1h` | How often the janitor sweeps |
 | `cleanup.retention` | `12h` | How long an idle run is kept |
@@ -99,44 +115,8 @@ Every key except `sync_client` may be omitted. Defaults are shown below.
 | `limits.max_data_bytes` | `10485760` | 10 MiB; payload, body and frame cap |
 | `checkpoint.release_lead_time` | `500ms` | How far ahead a release tells agents to resume; at most `10s` |
 
-<details>
-<summary><b>Full example configuration</b></summary>
-
-```json
-{
-  "http_port": 9104,
-  "ws_port": 9105,
-  "logging": {
-    "level": "DEBUG"
-  },
-  "auth": {
-    "mode": "basic"
-  },
-  "sync_client": {
-    "username": "exampleUserName",
-    "password": "examplePassWord"
-  },
-  "storage": {
-    "type": "sqlite",
-    "sqlite_path": "./testsync.db"
-  },
-  "cleanup": {
-    "interval": "1h",
-    "retention": "12h"
-  },
-  "limits": {
-    "max_tests": 10000,
-    "max_connections_per_test": 256,
-    "max_checkpoints_per_test": 256,
-    "max_data_bytes": 10485760
-  },
-  "checkpoint": {
-    "release_lead_time": "500ms"
-  }
-}
-```
-
-</details>
+[`config/configuration.example.json`](config/configuration.example.json) lists
+every key with its default.
 
 ## Authentication
 

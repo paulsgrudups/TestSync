@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -44,6 +43,15 @@ var (
 		"insecure-no-auth", false,
 		"disable authentication entirely; development only",
 	)
+
+	// The flags for the settings an operator changes most. Every setting,
+	// these included, can also be set with a TESTSYNC_* environment variable;
+	// a flag wins over both the variable and the file.
+	httpPort   = pflag.Int("http-port", 0, "HTTP API port (default 9104)")
+	wsPort     = pflag.Int("ws-port", 0, "WebSocket port (default 9105)")
+	logLevel   = pflag.String("log-level", "", "DEBUG, INFO, WARN or ERROR (default INFO)")
+	logFormat  = pflag.String("log-format", "", "json or text (default json)")
+	sqlitePath = pflag.String("sqlite-path", "", "database file (default ./testsync.db)")
 )
 
 func main() {
@@ -66,14 +74,32 @@ func run() error {
 		return nil
 	}
 
-	conf, err := loadConfig(*configDir)
+	// Defaults, then the file, then TESTSYNC_* variables, then flags.
+	loaded, err := utils.Load(utils.LoadOptions{
+		Dir:         *configDir,
+		RequireFile: pflag.CommandLine.Changed("configDir"),
+		LookupEnv:   os.LookupEnv,
+		Override:    applyFlags,
+	})
 	if err != nil {
 		return err
 	}
 
+	conf := loaded.Config
+
 	logger, err := setupLogging(conf.Logging)
 	if err != nil {
 		return err
+	}
+
+	if loaded.File == "" {
+		logger.Info("no configuration file; configured from defaults, environment and flags")
+	} else {
+		logger.Info("read the configuration file", "path", loaded.File)
+	}
+
+	for _, warning := range loaded.Warnings {
+		logger.Warn(warning)
 	}
 
 	// From here on the operator has a log, so a failure is recorded there as
@@ -87,30 +113,30 @@ func run() error {
 	return nil
 }
 
-// loadConfig reads and validates the configuration file.
-func loadConfig(dir string) (utils.Config, error) {
-	filename := filepath.Join(dir, "configuration.json")
+// applyFlags is the top configuration layer: only the flags the operator
+// actually set override anything.
+func applyFlags(conf *utils.Config) {
+	flags := pflag.CommandLine
 
-	var conf utils.Config
-
-	if err := utils.ReadConfig(filename, &conf); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return conf, fmt.Errorf(
-				"no configuration file at %s: create it, or point -c at the directory holding it",
-				filename,
-			)
-		}
-
-		return conf, fmt.Errorf("could not read %s: %w", filename, err)
+	if flags.Changed("http-port") {
+		conf.HTTPPort = *httpPort
 	}
 
-	utils.ApplyDefaults(&conf)
-
-	if err := utils.Validate(&conf); err != nil {
-		return conf, fmt.Errorf("invalid configuration in %s: %w", filename, err)
+	if flags.Changed("ws-port") {
+		conf.WSPort = *wsPort
 	}
 
-	return conf, nil
+	if flags.Changed("log-level") {
+		conf.Logging.Level = *logLevel
+	}
+
+	if flags.Changed("log-format") {
+		conf.Logging.Format = *logFormat
+	}
+
+	if flags.Changed("sqlite-path") {
+		conf.Storage.SQLitePath = *sqlitePath
+	}
 }
 
 // setupLogging builds the process logger from the configured level, format and
@@ -360,13 +386,13 @@ func setupAuth(
 func authError(err error) error {
 	return fmt.Errorf(`refusing to start: %w
 
-TestSync requires authentication. Configure credentials in configuration.json:
+TestSync requires authentication. Provide a password in any one of these ways
+(the username defaults to "testsync"):
 
-  "sync_client": {"username": "...", "password": "..."}
+  TESTSYNC_SYNC_CLIENT_PASSWORD=...               environment variable
+  TESTSYNC_SYNC_CLIENT_PASSWORD_FILE=/run/secrets/testsync
+  "sync_client": {"username": "...", "password": "..."}   in configuration.json
 
-To run without authentication (development machines only), opt out explicitly:
-
-  "auth": {"mode": "none"}
-
-or start the server with --insecure-no-auth`, err)
+To run without authentication (development machines only), opt out explicitly
+with --insecure-no-auth, TESTSYNC_AUTH_MODE=none, or "auth": {"mode": "none"}`, err)
 }
