@@ -19,7 +19,6 @@ import (
 
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/api/ws"
 	"github.com/paulsgrudups/testsync/internal/app"
 	"github.com/paulsgrudups/testsync/storage"
 	"github.com/paulsgrudups/testsync/utils"
@@ -48,7 +47,6 @@ var (
 	// these included, can also be set with a TESTSYNC_* environment variable;
 	// a flag wins over both the variable and the file.
 	httpPort   = pflag.Int("http-port", 0, "HTTP API port (default 9104)")
-	wsPort     = pflag.Int("ws-port", 0, "WebSocket port (default 9105)")
 	logLevel   = pflag.String("log-level", "", "DEBUG, INFO, WARN or ERROR (default INFO)")
 	logFormat  = pflag.String("log-format", "", "json or text (default json)")
 	sqlitePath = pflag.String("sqlite-path", "", "database file (default ./testsync.db)")
@@ -120,10 +118,6 @@ func applyFlags(conf *utils.Config) {
 
 	if flags.Changed("http-port") {
 		conf.HTTPPort = *httpPort
-	}
-
-	if flags.Changed("ws-port") {
-		conf.WSPort = *wsPort
 	}
 
 	if flags.Changed("log-level") {
@@ -232,21 +226,32 @@ func serve(ctx context.Context, conf utils.Config, logger *slog.Logger) error {
 
 	janitor.Start(janitorCtx)
 
-	wsServer := ws.StartWebSocketServer(application)
+	// One port serves everything, WebSocket registrations included (API-7).
+	// A configured ws_port gets a second listener on the very same handler,
+	// so agents that still dial it keep working for one more release.
+	servers := []*http.Server{newHTTPServer(conf.HTTPPort, handler)}
 
-	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", conf.HTTPPort),
-		Handler:      handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  10 * time.Second,
+	if conf.WSPort != 0 && conf.WSPort != conf.HTTPPort {
+		logger.WarnContext(ctx, "deprecated: ws_port starts a second listener that "+
+			"serves the same API; agents can register on http_port. Remove ws_port "+
+			"once they do; it will be dropped in a future release.",
+			"ws_port", conf.WSPort, "http_port", conf.HTTPPort,
+		)
+
+		servers = append(servers, newHTTPServer(conf.WSPort, handler))
 	}
 
-	httpErr := listen(server, conf.HTTPPort, logger)
+	listenErrs := make(chan error, len(servers))
 
-	logger.InfoContext(ctx, "testsync started",
-		"http_port", conf.HTTPPort, "ws_port", conf.WSPort,
-	)
+	for _, server := range servers {
+		go func() {
+			if err := <-listen(server, logger); err != nil {
+				listenErrs <- err
+			}
+		}()
+	}
+
+	logger.InfoContext(ctx, "testsync started", "port", conf.HTTPPort)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -256,11 +261,10 @@ func serve(ctx context.Context, conf utils.Config, logger *slog.Logger) error {
 	select {
 	case <-stop:
 		logger.InfoContext(ctx, "signal received, shutting down")
-	case listenErr = <-httpErr:
-	case listenErr = <-wsServer.ListenErr():
+	case listenErr = <-listenErrs:
 	}
 
-	if err := shutdown(application, server, wsServer, janitor); err != nil && listenErr == nil {
+	if err := shutdown(application, servers, janitor); err != nil && listenErr == nil {
 		listenErr = err
 	}
 
@@ -269,11 +273,25 @@ func serve(ctx context.Context, conf utils.Config, logger *slog.Logger) error {
 	return listenErr
 }
 
+// newHTTPServer builds the listener for one port. The server-wide timeouts
+// bound reading a request's headers and writing an ordinary response; an
+// upgraded WebSocket connection sets its own deadlines on every read and
+// write, so they do not cut it off.
+func newHTTPServer(port int, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:         fmt.Sprintf(":%d", port),
+		Handler:      handler,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  10 * time.Second,
+	}
+}
+
 // listen starts accepting HTTP requests and reports a fatal listen error, such
 // as a port already in use, on the returned channel. The error used to be
 // raised as a panic inside the accept goroutine, where it arrived as a stack
 // trace attributed to nothing in particular (STAB-7).
-func listen(server *http.Server, port int, logger *slog.Logger) <-chan error {
+func listen(server *http.Server, logger *slog.Logger) <-chan error {
 	failed := make(chan error, 1)
 
 	go func() {
@@ -281,7 +299,7 @@ func listen(server *http.Server, port int, logger *slog.Logger) <-chan error {
 
 		err := server.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			failed <- fmt.Errorf("http server on port %d: %w", port, err)
+			failed <- fmt.Errorf("http server on %s: %w", server.Addr, err)
 		}
 	}()
 
@@ -301,28 +319,22 @@ func listen(server *http.Server, port int, logger *slog.Logger) <-chan error {
 // The whole sequence is bounded by shutdownTimeout. The store used to be
 // closed first, so requests in flight during a restart failed with
 // "sql: database is closed" and looked like flaky tests.
-func shutdown(
-	a *app.App, server *http.Server, wsServer *ws.Server, janitor *runs.Janitor,
-) error {
+func shutdown(a *app.App, servers []*http.Server, janitor *runs.Janitor) error {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	var failure error
 
-	// Stop accepting upgrades first: hijacked connections are not tracked by
-	// http.Server, so this returns as soon as the listener is closed.
-	if err := wsServer.Shutdown(ctx); err != nil {
-		a.Log.Error("failed to stop the websocket server", "error", err)
+	// Drain the servers while the store is still open. Hijacked WebSocket
+	// connections are not tracked by http.Server, so this stops new upgrades
+	// but leaves the agents connected; they are closed below.
+	for _, server := range servers {
+		if err := server.Shutdown(ctx); err != nil {
+			a.Log.Error("failed to stop an http server", "addr", server.Addr, "error", err)
 
-		failure = fmt.Errorf("websocket server shutdown: %w", err)
-	}
-
-	// Drain the HTTP server while the store is still open.
-	if err := server.Shutdown(ctx); err != nil {
-		a.Log.Error("failed to stop the http server", "error", err)
-
-		if failure == nil {
-			failure = fmt.Errorf("http server shutdown: %w", err)
+			if failure == nil {
+				failure = fmt.Errorf("http server shutdown: %w", err)
+			}
 		}
 	}
 

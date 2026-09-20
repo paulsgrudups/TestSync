@@ -215,7 +215,7 @@ It reads:
 | Variable | Default |
 | --- | --- |
 | `TESTSYNC_HTTP_URL` | `http://localhost:9104` |
-| `TESTSYNC_WS_URL` | `ws://localhost:9105` |
+| `TESTSYNC_WS_URL` | `TESTSYNC_HTTP_URL` with `ws` for `http` |
 | `TESTSYNC_USER` | `exampleUserName` |
 | `TESTSYNC_PASS` | `examplePassWord` |
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,7 +22,9 @@ type Message struct {
 
 func main() {
 	httpURL := getEnv("TESTSYNC_HTTP_URL", "http://localhost:9104")
-	wsURL := getEnv("TESTSYNC_WS_URL", "ws://localhost:9105")
+	// Agents register on the HTTP port; TESTSYNC_WS_URL is only needed for a
+	// server that still runs the deprecated second listener.
+	wsURL := getEnv("TESTSYNC_WS_URL", "ws"+strings.TrimPrefix(httpURL, "http"))
 	username := getEnv("TESTSYNC_USER", "exampleUserName")
 	password := getEnv("TESTSYNC_PASS", "examplePassWord")
 

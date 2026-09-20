@@ -13,7 +13,6 @@ import (
 
 	"github.com/paulsgrudups/testsync/api/auth"
 	"github.com/paulsgrudups/testsync/api/runs"
-	"github.com/paulsgrudups/testsync/api/ws"
 	"github.com/paulsgrudups/testsync/internal/app"
 	"github.com/paulsgrudups/testsync/internal/storagetest"
 	"github.com/paulsgrudups/testsync/utils"
@@ -49,7 +48,7 @@ func loadConfig(t *testing.T, dir string, required bool) (utils.Config, error) {
 // sentence they can act on, not a runtime panic with a stack trace. main turns
 // each of these into one line on stderr and exit code 1.
 func TestStartupErrorsAreReadable(t *testing.T) {
-	valid := `{"http_port":19104,"ws_port":19105,` +
+	valid := `{"http_port":19104,` +
 		`"sync_client":{"username":"u","password":"p"}}`
 
 	cases := []struct {
@@ -78,13 +77,13 @@ func TestStartupErrorsAreReadable(t *testing.T) {
 		},
 		{
 			name:  "invalid port",
-			body:  `{"http_port":70000,"ws_port":19105}`,
+			body:  `{"http_port":70000}`,
 			wants: []string{"invalid configuration", "http_port is 70000", "between 1 and 65535"},
 		},
 		{
-			name:  "colliding ports",
-			body:  `{"http_port":19104,"ws_port":19104}`,
-			wants: []string{"both 19104", "different ports"},
+			name:  "invalid deprecated ws_port",
+			body:  `{"http_port":19104,"ws_port":70000}`,
+			wants: []string{"ws_port is 70000", "between 1 and 65535"},
 		},
 		{
 			name:  "negative limit",
@@ -147,7 +146,7 @@ func TestListenReportsBindFailure(t *testing.T) {
 	}
 
 	select {
-	case err := <-listen(server, port, utils.DiscardLogger()):
+	case err := <-listen(server, utils.DiscardLogger()):
 		if err == nil {
 			t.Fatal("expected a listen error")
 		}
@@ -156,7 +155,7 @@ func TestListenReportsBindFailure(t *testing.T) {
 			t.Fatalf("expected an address-in-use error, got: %v", err)
 		}
 
-		if !strings.Contains(err.Error(), fmt.Sprintf("port %d", port)) {
+		if !strings.Contains(err.Error(), fmt.Sprintf(":%d", port)) {
 			t.Fatalf("expected the error to name the port, got: %v", err)
 		}
 	case <-time.After(5 * time.Second):
@@ -174,7 +173,8 @@ func TestConfigDefaultsAreUsable(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if conf.HTTPPort != utils.DefaultHTTPPort || conf.WSPort != utils.DefaultWSPort {
+	// One port; the deprecated second listener is off unless asked for.
+	if conf.HTTPPort != utils.DefaultHTTPPort || conf.WSPort != 0 {
 		t.Fatalf("unexpected ports: %d, %d", conf.HTTPPort, conf.WSPort)
 	}
 
@@ -265,7 +265,7 @@ func TestShutdownLetsInFlightRequestsFinish(t *testing.T) {
 
 	begun := time.Now()
 
-	if err := shutdown(application, server, &ws.Server{}, janitor); err != nil {
+	if err := shutdown(application, []*http.Server{server}, janitor); err != nil {
 		t.Fatalf("shutdown reported: %v", err)
 	}
 
@@ -371,8 +371,8 @@ func TestExampleConfigurationIsCurrent(t *testing.T) {
 
 	// Every setting the server has appears in the example.
 	for name, key := range utils.EnvVars() {
-		if key == "sync_client.password_file" || key == "storage.type" {
-			continue // alternatives and legacy keys, documented elsewhere
+		if key == "sync_client.password_file" || key == "storage.type" || key == "ws_port" {
+			continue // alternatives and deprecated keys, documented elsewhere
 		}
 
 		leaf := key[strings.LastIndex(key, ".")+1:]

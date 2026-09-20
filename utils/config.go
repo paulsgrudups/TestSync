@@ -45,10 +45,6 @@ const (
 	// DefaultHTTPPort is the port the HTTP API listens on when none is set.
 	DefaultHTTPPort = 9104
 
-	// DefaultWSPort is the port the WebSocket server listens on when none is
-	// set.
-	DefaultWSPort = 9105
-
 	// MaxPort is the highest usable TCP port number.
 	MaxPort = 65535
 )
@@ -99,8 +95,17 @@ const (
 
 // Config defines the basic configurable parameters for the service.
 type Config struct {
-	HTTPPort   int              `json:"http_port"`
-	WSPort     int              `json:"ws_port"`
+	// HTTPPort is the one port the server listens on: the HTTP API, the
+	// monitoring UI and WebSocket registrations.
+	HTTPPort int `json:"http_port"`
+
+	// WSPort is deprecated. The server used to take WebSocket registrations
+	// on a port of their own; it now takes them on HTTPPort. When set, a
+	// second listener serving the same API is started so that agents still
+	// dialling it keep working for one more release. Zero, the default,
+	// starts no second listener.
+	WSPort int `json:"ws_port"`
+
 	Logging    LogConfig        `json:"logging"`
 	Auth       AuthConfig       `json:"auth"`
 	SyncClient BasicCredentials `json:"sync_client"`
@@ -226,10 +231,6 @@ func ApplyDefaults(conf *Config) {
 		conf.HTTPPort = DefaultHTTPPort
 	}
 
-	if conf.WSPort == 0 {
-		conf.WSPort = DefaultWSPort
-	}
-
 	if conf.Cleanup.Interval == 0 {
 		conf.Cleanup.Interval = Duration(DefaultCleanupInterval)
 	}
@@ -271,15 +272,12 @@ func Validate(conf *Config) error {
 		return err
 	}
 
-	if err := validatePort("ws_port", conf.WSPort); err != nil {
-		return err
-	}
-
-	if conf.HTTPPort == conf.WSPort {
-		return fmt.Errorf(
-			"http_port and ws_port are both %d; the two servers need different ports",
-			conf.HTTPPort,
-		)
+	// ws_port is optional and deprecated. Zero, or the same port as
+	// http_port, starts no second listener.
+	if conf.WSPort != 0 {
+		if err := validatePort("ws_port", conf.WSPort); err != nil {
+			return err
+		}
 	}
 
 	if err := validateLogging(conf.Logging); err != nil {

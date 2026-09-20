@@ -22,7 +22,7 @@ module.exports = {
       : null;
 
     // Initialize the WebSocket
-    const wsp = new WebSocketAsPromised("ws://localhost:9105/register/1", {
+    const wsp = new WebSocketAsPromised("ws://localhost:9104/register/1", {
       // "testsync.v1" asks for protocol v1 by name (PROTOCOL.md).
       createWebSocket: (url) =>
         new W3CWebSocket(url, "testsync.v1", null, headers),

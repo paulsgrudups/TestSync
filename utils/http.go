@@ -1,10 +1,12 @@
 package utils
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"regexp"
 	"runtime/debug"
@@ -40,6 +42,24 @@ type responseWriter struct {
 
 func newResponseWriter(w http.ResponseWriter) *responseWriter {
 	return &responseWriter{w, http.StatusOK}
+}
+
+// Hijack hands the connection over, which is what a WebSocket upgrade does.
+// gorilla/websocket asserts [http.Hijacker] on the writer it is given, so a
+// wrapper without this method would refuse every upgrade behind it. The
+// status is recorded as the 101 the upgrade answered with.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, buf, err := http.NewResponseController(rw.ResponseWriter).Hijack()
+	if err == nil {
+		rw.statusCode = http.StatusSwitchingProtocols
+	}
+
+	return conn, buf, err
+}
+
+// Unwrap exposes the wrapped writer to [http.ResponseController].
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
 }
 
 // WriteHeader overrides default WriteHeader. Response code is saved for logging

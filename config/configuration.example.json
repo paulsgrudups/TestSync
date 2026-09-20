@@ -1,6 +1,5 @@
 {
   "http_port": 9104,
-  "ws_port": 9105,
   "logging": {
     "level": "INFO",
     "format": "json",

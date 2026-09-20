@@ -2,7 +2,6 @@ package ws
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/paulsgrudups/testsync/api/auth"
-	"github.com/paulsgrudups/testsync/internal/buildinfo"
 	"github.com/paulsgrudups/testsync/utils"
 	"github.com/paulsgrudups/testsync/wsutil"
 )
@@ -59,42 +57,31 @@ var (
 	}
 )
 
+// RouteName names the registration route, so middleware can recognise the
+// one request that becomes a long-lived connection.
+const RouteName = "registerWebSocket"
+
+// RegisterRoutes adds the registration route to the given router.
+func (s *Server) RegisterRoutes(r *mux.Router) {
+	// Bounded to the digits an int64 can hold: a longer ID is not a test ID,
+	// and letting it reach the handler only creates work to reject it.
+	r.HandleFunc(`/register/{testID:[0-9]{1,19}}`, s.registerWS).
+		Name(RouteName).
+		Methods(http.MethodGet)
+}
+
+// newWSRouter serves the registration route alone, with panic recovery. The
+// server itself mounts it on the main router; this is for tests that exercise
+// the WebSocket side on its own.
 func newWSRouter(s *Server) http.Handler {
 	router := mux.NewRouter().StrictSlash(true)
 
 	// A panic must cost at most one connection, never the process.
 	router.Use(utils.RecoverPanics(s.log()))
 
-	// The same descriptor the HTTP port serves, so whichever port a person
-	// finds first tells them what it is.
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		body, err := json.Marshal(buildinfo.Describe())
-		if err != nil {
-			utils.HTTPError(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-
-		if _, err := w.Write(body); err != nil {
-			s.log().DebugContext(
-				r.Context(), "failed to write the websocket root response", "error", err,
-			)
-		}
-	}).Methods(http.MethodGet)
-
-	subrouter := router.PathPrefix("/register").Subrouter().StrictSlash(true)
-	s.register(subrouter)
+	s.RegisterRoutes(router)
 
 	return router
-}
-
-func (s *Server) register(r *mux.Router) {
-	// Bounded to the digits an int64 can hold: a longer ID is not a test ID,
-	// and letting it reach the handler only creates work to reject it.
-	r.HandleFunc(`/{testID:[0-9]{1,19}}`, s.registerWS).
-		Name("registerWebSocket").
-		Methods(http.MethodGet)
 }
 
 func (s *Server) registerWS(w http.ResponseWriter, r *http.Request) {

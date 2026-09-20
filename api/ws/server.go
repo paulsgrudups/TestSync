@@ -1,11 +1,7 @@
 package ws
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/paulsgrudups/testsync/internal/app"
@@ -13,10 +9,9 @@ import (
 	"github.com/paulsgrudups/testsync/wsutil"
 )
 
-// Server describes WebSocket server with available handler functions.
+// Server is the WebSocket endpoint agents register on.
 type Server struct {
-	HTTPServer *http.Server
-	Handler    *CommandHandler
+	Handler *CommandHandler
 
 	// app carries the registry and the validator this server works against.
 	// Both used to be package globals installed by startup, so a WebSocket
@@ -24,17 +19,22 @@ type Server struct {
 	// instance (CODE-1).
 	app *app.App
 
-	// listenErr carries a fatal listen error, such as a port already in use,
-	// out of the accept goroutine. It used to be discarded there, leaving the
-	// process running with no WebSocket server at all and nothing said about
-	// it (STAB-7).
-	listenErr chan error
-
 	// pongWait overrides how long a connection may stay silent before its
 	// reader gives up on the peer. Zero, the only value used in production,
 	// means wsutil.PongWait; tests shorten it so that reaping an unresponsive
 	// peer does not take half a minute.
 	pongWait time.Duration
+}
+
+// NewServer builds the WebSocket endpoint for the given application. It
+// starts nothing: [Server.RegisterRoutes] adds its route to the main router,
+// so agents connect on the HTTP port through the same middleware as every
+// other request (API-7).
+func NewServer(a *app.App) *Server {
+	return &Server{
+		Handler: NewCommandHandler(a.Service, a.Metrics.Commands, a.Log),
+		app:     a,
+	}
 }
 
 // log returns the server's logger. A Server assembled without an App, which
@@ -54,56 +54,4 @@ func (s *Server) pongWaitDuration() time.Duration {
 	}
 
 	return wsutil.PongWait
-}
-
-// StartWebSocketServer launches a websocket server for the given application,
-// on the port its configuration names. A fatal listen error is delivered on
-// [Server.ListenErr] rather than crashing the accept goroutine or being
-// swallowed.
-func StartWebSocketServer(a *app.App) *Server {
-	port := a.Config.WSPort
-
-	s := &Server{
-		Handler:   NewCommandHandler(a.Service, a.Metrics.Commands, a.Log),
-		app:       a,
-		listenErr: make(chan error, 1),
-	}
-
-	s.HTTPServer = &http.Server{
-		Addr:         fmt.Sprintf(":%d", port),
-		Handler:      newWSRouter(s),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  10 * time.Second,
-	}
-
-	go func() {
-		defer utils.RecoverGoroutine(s.log(), "websocket listener")
-
-		err := s.HTTPServer.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.listenErr <- fmt.Errorf("websocket server on port %d: %w", port, err)
-		}
-	}()
-
-	return s
-}
-
-// ListenErr reports a fatal error from the accept loop. It yields at most one
-// error, and never fires for an ordinary shutdown.
-func (s *Server) ListenErr() <-chan error {
-	if s == nil || s.listenErr == nil {
-		return nil
-	}
-
-	return s.listenErr
-}
-
-// Shutdown gracefully stops the WebSocket server.
-func (s *Server) Shutdown(ctx context.Context) error {
-	if s == nil || s.HTTPServer == nil {
-		return nil
-	}
-
-	return s.HTTPServer.Shutdown(ctx)
 }

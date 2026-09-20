@@ -97,8 +97,8 @@ set:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `http_port` | `9104` | HTTP API port |
-| `ws_port` | `9105` | WebSocket port |
+| `http_port` | `9104` | The one port: HTTP API, UI, metrics and WebSocket registrations |
+| `ws_port` | — | **Deprecated.** Starts a second listener serving the same API, for agents that still dial the old port |
 | `logging.level` | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR` |
 | `logging.format` | `json` | `json` or `text` |
 | `logging.dir` | `.` | Directory for `test-sync.log` |
@@ -264,7 +264,8 @@ logs; `reason` stays the fixed value so agents can branch on it.
 
 ### WebSocket
 
-Base: `ws://<host>:<ws_port>`
+Base: `ws://<host>:<http_port>` — the same port as the HTTP API. The old
+separate `ws_port` still works when configured, but is deprecated.
 
 | Method | Route | Description | Auth |
 | --- | --- | --- | --- |
@@ -398,7 +399,7 @@ go run ./usage/e2e
 | Variable | Default |
 | --- | --- |
 | `TESTSYNC_HTTP_URL` | `http://localhost:9104` |
-| `TESTSYNC_WS_URL` | `ws://localhost:9105` |
+| `TESTSYNC_WS_URL` | `TESTSYNC_HTTP_URL` with `ws` for `http` |
 | `TESTSYNC_USER` | `exampleUserName` |
 | `TESTSYNC_PASS` | `examplePassWord` |
 

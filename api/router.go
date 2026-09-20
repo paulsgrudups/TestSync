@@ -9,6 +9,7 @@ import (
 
 	"github.com/paulsgrudups/testsync/api/monitor"
 	"github.com/paulsgrudups/testsync/api/runs"
+	"github.com/paulsgrudups/testsync/api/ws"
 	"github.com/paulsgrudups/testsync/internal/app"
 	"github.com/paulsgrudups/testsync/utils"
 
@@ -30,6 +31,10 @@ func NewRouter(a *app.App) (http.Handler, error) {
 
 	runs.RegisterTestsRoutes(router, a.Service, a.Auth, a.Log)
 
+	// Agents register on this port too, through the same middleware as every
+	// other request (API-7).
+	ws.NewServer(a).RegisterRoutes(router)
+
 	// Monitoring, the operator overrides and the UI page, behind the same
 	// validator.
 	monitor.RegisterRoutes(router, a)
@@ -46,8 +51,21 @@ func registerMiddlewares(r *mux.Router, a *app.App) error {
 		return fmt.Errorf("failed to marshal the timeout body: %w", err)
 	}
 
+	// The one exception is the WebSocket registration, which becomes a
+	// connection that lives as long as the agent does. http.TimeoutHandler
+	// cannot be hijacked, so wrapping it would refuse every upgrade; the
+	// connection has read and write deadlines of its own instead.
 	timeoutMW := func(next http.Handler) http.Handler {
-		return http.TimeoutHandler(next, 10*time.Second, string(body))
+		timed := http.TimeoutHandler(next, 10*time.Second, string(body))
+
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if route := mux.CurrentRoute(r); route != nil && route.GetName() == ws.RouteName {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			timed.ServeHTTP(w, r)
+		})
 	}
 
 	// Outermost, so a request is counted with the status its client actually

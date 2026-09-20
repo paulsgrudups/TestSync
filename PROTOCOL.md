@@ -18,7 +18,7 @@ cannot drift apart without a test failing.
 ## Connecting
 
 ```
-GET ws://<host>:<ws_port>/register/{testID}
+GET ws://<host>:<http_port>/register/{testID}
 Authorization: Basic <base64(username:password)>
 Sec-WebSocket-Protocol: testsync.v1
 ```
